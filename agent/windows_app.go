@@ -46,6 +46,7 @@ type desktopApp struct {
 	mStatus    *systray.MenuItem
 	mOpen      *systray.MenuItem
 	mReconnect *systray.MenuItem
+	mAutostart *systray.MenuItem
 	mInstall   *systray.MenuItem
 	mUninstall *systray.MenuItem
 	mQuit      *systray.MenuItem
@@ -102,6 +103,7 @@ func (a *desktopApp) startUI() error {
 	mux.HandleFunc("/api/reconnect", a.auth(a.handleReconnect))
 	mux.HandleFunc("/api/service/install", a.auth(a.handleInstallService))
 	mux.HandleFunc("/api/service/uninstall", a.auth(a.handleUninstallService))
+	mux.HandleFunc("/api/autostart", a.auth(a.handleAutoStart))
 	mux.HandleFunc("/api/quit", a.auth(a.handleQuit))
 	a.server = &http.Server{Handler: mux}
 	go func() {
@@ -250,6 +252,7 @@ func (a *desktopApp) onReady() {
 	a.mOpen = systray.AddMenuItem("打开设置", "打开本地设置页")
 	a.mReconnect = systray.AddMenuItem("重新连接", "重新加载凭证并连接")
 	systray.AddSeparator()
+	a.mAutostart = systray.AddMenuItemCheckbox("开机启动", "登录 Windows 后自动启动托盘", autoStartEnabled())
 	a.mInstall = systray.AddMenuItem("安装为 Windows 服务", "需要管理员权限")
 	a.mUninstall = systray.AddMenuItem("解除 Windows 服务", "需要管理员权限")
 	systray.AddSeparator()
@@ -264,6 +267,15 @@ func (a *desktopApp) onReady() {
 				a.openUI()
 			case <-a.mReconnect.ClickedCh:
 				a.startWorker()
+			case <-a.mAutostart.ClickedCh:
+				enabled := !autoStartEnabled()
+				if err := setAutoStart(enabled); err != nil {
+					log.Printf("desktop: autostart: %v", err)
+				} else if enabled {
+					a.mAutostart.Check()
+				} else {
+					a.mAutostart.Uncheck()
+				}
 			case <-a.mInstall.ClickedCh:
 				if err := installService(a.cfg.credentialsFile); err != nil {
 					log.Printf("desktop: install service: %v", err)
@@ -370,6 +382,32 @@ func (a *desktopApp) handleInstallService(w http.ResponseWriter, _ *http.Request
 	a.mu.Unlock()
 	a.refreshTray()
 	writeJSONReply(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (a *desktopApp) handleAutoStart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSONReply(w, http.StatusMethodNotAllowed, map[string]any{"ok": false})
+		return
+	}
+	var body struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSONReply(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "invalid JSON"})
+		return
+	}
+	if err := setAutoStart(body.Enabled); err != nil {
+		writeJSONReply(w, http.StatusBadRequest, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	if a.mAutostart != nil {
+		if body.Enabled {
+			a.mAutostart.Check()
+		} else {
+			a.mAutostart.Uncheck()
+		}
+	}
+	writeJSONReply(w, http.StatusOK, map[string]any{"ok": true, "autostart": autoStartEnabled()})
 }
 
 func (a *desktopApp) handleUninstallService(w http.ResponseWriter, _ *http.Request) {

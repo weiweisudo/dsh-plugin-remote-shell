@@ -31,6 +31,16 @@ remote-agent.exe --service       SCM 内部入口，无 UI
   - 安装/解除服务
   - 退出托盘
 
+## 开机启动
+
+托盘和本地设置页都有「开机启动」开关：
+
+- 写 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`
+- 值名 `DSHRemoteShell`，内容为当前 exe 路径
+- 用户登录后启动托盘，不需要管理员
+- 比服务轻，保留用户桌面环境
+- 如果安装了服务，建议关闭开机启动，避免服务 + 托盘重复连接
+
 ## Windows 服务
 
 ```powershell

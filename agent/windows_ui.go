@@ -88,6 +88,8 @@ const desktopHTML = `<!doctype html>
   .msg { min-height: 20px; font-size: 12px; color: var(--muted); margin-top: 8px; }
   .msg.bad { color: var(--bad); }
   .msg.ok { color: var(--ok); }
+  .checkrow { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+  .checkrow input { width: 16px; height: 16px; }
   .warn { color: var(--warn); }
 </style>
 </head>
@@ -112,6 +114,13 @@ const desktopHTML = `<!doctype html>
       <button id="reconnect">重新连接</button>
     </div>
     <div class="msg" id="pairMsg"></div>
+  </section>
+
+  <section>
+    <h2>开机启动</h2>
+    <label class="checkrow"><input type="checkbox" id="autostart"> 登录 Windows 后自动启动托盘</label>
+    <div class="meta" style="margin-top:8px">只写当前用户的 HKCU Run，不需要管理员；比服务轻。若已安装服务，建议关闭此项，避免重复连接。</div>
+    <div class="msg" id="autoMsg"></div>
   </section>
 
   <section>
@@ -176,6 +185,8 @@ const desktopHTML = `<!doctype html>
         : "服务未安装（当前为托盘单机模式）";
       $("install").disabled = !!s.service_installed;
       $("uninstall").disabled = !s.service_installed;
+      $("autostart").checked = !!s.autostart;
+      $("autostart").disabled = !!s.service_running;
     } catch (e) {
       $("state").textContent = "无法读取设置接口";
       $("err").textContent = e.message;
@@ -199,6 +210,16 @@ const desktopHTML = `<!doctype html>
   $("reconnect").onclick = async () => {
     try { await api("/api/reconnect", { method: "POST" }); msg($("pairMsg"), "已请求重连", "ok"); load(); }
     catch (e) { msg($("pairMsg"), e.message, "bad"); }
+  };
+  $("autostart").onchange = async (event) => {
+    try {
+      const data = await api("/api/autostart", { method: "POST", body: JSON.stringify({ enabled: event.target.checked }) });
+      msg($("autoMsg"), data.autostart ? "已开启开机启动" : "已关闭开机启动", "ok");
+      load();
+    } catch (e) {
+      event.target.checked = !event.target.checked;
+      msg($("autoMsg"), e.message, "bad");
+    }
   };
   $("install").onclick = async () => {
     if (!confirm("安装为 Windows 服务？需要管理员权限，服务会开机自启并以 LocalSystem 运行。")) return;
