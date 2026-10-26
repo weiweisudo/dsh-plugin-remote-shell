@@ -120,7 +120,7 @@ window.__ModuleLoader__.load({
 					h(
 						"div",
 						{ style: { ...S.note, marginBottom: 8 } },
-						"agent 主动出站连接 DSH；不需要 sshd / WinRM / 入站端口。P0 只提供非交互命令执行。",
+						"agent 主动出站连接 DSH 插件专用端口（默认 47777）；目标机不需要 sshd / WinRM，也不监听端口。P0 只提供非交互命令执行。",
 					),
 					h(
 						"div",
@@ -222,10 +222,10 @@ window.__ModuleLoader__.load({
 						{ style: S.code },
 						[
 							"# Windows (PowerShell)",
-							".\\remote-agent-windows-amd64.exe --server wss://dsh6.potatooo.top:777/api/remote-shell/agent --machine-id <id> --token-file token.txt",
+							".\\remote-agent-windows-amd64.exe --server ws://192.168.5.8:47777/api/remote-shell/agent --machine-id <id> --token-file token.txt",
 							"",
 							"# Linux",
-							"./remote-agent-linux-amd64 --server wss://dsh6.potatooo.top:777/api/remote-shell/agent --machine-id <id> --token-file token.txt",
+							"./remote-agent-linux-amd64 --server ws://192.168.5.8:47777/api/remote-shell/agent --machine-id <id> --token-file token.txt",
 						].join("\n"),
 					),
 				),

@@ -52,13 +52,15 @@ PASS
 
 ## 尚未验证
 
-- 通过 DSH 的 `registerUpgrade` 与 Lucky `dsh6:777` 的 WebSocket 升级（下一步）
+- 真实 DSH 插件端口 `47777` 的 LAN 直连（下一步）
+- 远程访问所需的端口映射 / Tailscale（P0 不做）
 - Windows agent 实机运行（只有交叉编译）
 - 命令超时/输出截断/并发上限（逻辑存在，未做破坏性测试）
 
 ## 已知限制
 
 - P0 没有 PTY、文件传输、配对码、自动 token 轮换
+- agent 端口默认绑定 `0.0.0.0:47777`，仅靠 token 保护；不要直接暴露到公网
 - agent 未签名，Windows Defender 可能拦截
 - token 一次性展示；丢失需撤销机器重建
 - 命令无持久 shell 状态（`cd` 不跨命令）

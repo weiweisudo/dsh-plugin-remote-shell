@@ -19,4 +19,4 @@
 
 ## 其他参考
 
-- DSH `dsh-server-deck` 的 `registerUpgrade` + `WebSocketServer` PTY 模式（本机插件，非上游代码）
+- DSH `dsh-server-deck` 的 `WebSocketServer({ noServer: true })` PTY 模式（本机插件，非上游代码；本仓库改用独立端口）

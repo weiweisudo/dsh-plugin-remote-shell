@@ -9,6 +9,8 @@ import { fileURLToPath } from "node:url";
 
 const state = mkdtempSync(join(tmpdir(), "remote-shell-e2e-"));
 process.env.REMOTE_SHELL_STATE_DIR = state;
+process.env.REMOTE_SHELL_AGENT_PORT = process.env.REMOTE_SHELL_AGENT_PORT || String(48000 + (process.pid % 1000));
+const agentPort = Number(process.env.REMOTE_SHELL_AGENT_PORT);
 const { apply } = await import("../lib/index.mjs");
 
 const agentBin = process.env.AGENT_BIN
@@ -16,12 +18,10 @@ const agentBin = process.env.AGENT_BIN
   : fileURLToPath(new URL("../../dist/remote-agent-linux-amd64", import.meta.url));
 const tools = {};
 const routes = [];
-const upgrades = [];
 apply({
   tools: { register: (d) => { tools[d.name] = d; return () => {}; } },
   webServer: {
     register: (r) => { routes.push(r); return () => {}; },
-    registerUpgrade: (r) => { upgrades.push(r); return () => {}; },
   },
   effect: (fn) => { const d = fn(); return d || (() => {}); },
 });
@@ -31,12 +31,6 @@ const server = http.createServer(async (req, res) => {
   const route = routes.find((r) => path === r.path || path.startsWith(r.path + "/"));
   if (!route) { res.writeHead(404); res.end(); return; }
   await route.handler(req, res);
-});
-server.on("upgrade", (req, socket, head) => {
-  const path = new URL(req.url, "http://local").pathname;
-  const route = upgrades.find((r) => path === r.path);
-  if (!route) { socket.destroy(); return; }
-  route.handler(req, socket, head);
 });
 await new Promise((r) => server.listen(0, "127.0.0.1", r));
 const port = server.address().port;
@@ -60,7 +54,7 @@ const tokenFile = join(state, "token.txt");
 writeFileSync(tokenFile, created.token, { mode: 0o600 });
 
 const agent = spawn(agentBin, [
-  "--server", `ws://127.0.0.1:${port}/api/remote-shell/agent`,
+  "--server", `ws://127.0.0.1:${agentPort}/api/remote-shell/agent`,
   "--machine-id", id,
   "--token-file", tokenFile,
   "--name", "e2e",

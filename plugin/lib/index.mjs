@@ -1,4 +1,5 @@
 import { defineTool } from "@deepseek-ai/dsh-tools";
+import http from "node:http";
 import { WebSocketServer } from "ws";
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
@@ -10,6 +11,8 @@ export const inject = ["webServer", "tools"];
 const BASE = "/api/remote-shell";
 const AGENT_PATH = `${BASE}/agent`;
 const STATE_DIR = process.env.REMOTE_SHELL_STATE_DIR || join(process.env.HOME || "/root", ".dsh", "remote-shell");
+const AGENT_HOST = process.env.REMOTE_SHELL_LISTEN_HOST || "0.0.0.0";
+const AGENT_PORT = Math.max(1, Math.min(65535, Number(process.env.REMOTE_SHELL_AGENT_PORT) || 47777));
 const MACHINES_FILE = join(STATE_DIR, "machines.json");
 const SECRETS_FILE = join(STATE_DIR, "secrets.json");
 
@@ -306,10 +309,10 @@ async function readBody(req) {
 }
 
 function agentCommand(req, machineId) {
-	const protoHeader = String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim();
-	const proto = protoHeader === "https" ? "wss" : "ws";
-	const host = String(req.headers["x-forwarded-host"] || req.headers.host || "127.0.0.1:3088");
-	return `remote-agent --server ${proto}://${host}${AGENT_PATH} --machine-id ${machineId} --token-file token.txt`;
+	const proto = process.env.REMOTE_SHELL_AGENT_TLS === "1" ? "wss" : "ws";
+	const hostHeader = String(req.headers["x-forwarded-host"] || req.headers.host || "127.0.0.1");
+	const hostname = hostHeader.replace(/:[0-9]+$/, "");
+	return `remote-agent --server ${proto}://${hostname}:${AGENT_PORT}${AGENT_PATH} --machine-id ${machineId} --token-file token.txt`;
 }
 
 export function apply(ctx) {
@@ -328,21 +331,34 @@ export function apply(ctx) {
 		return machine;
 	};
 
+	// The DSH web port is behind lanmode password auth, which also gates
+	// WebSocket upgrades. Keep the agent listener on its own port, like the
+	// browser-skill daemon, and authenticate every agent with its own token.
+	const agentServer = http.createServer((_req, res) => {
+		res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
+		res.end("not found");
+	});
+	agentServer.on("upgrade", (req, socket, head) => {
+		const machine = authorize(req);
+		if (!machine) {
+			socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+			socket.destroy();
+			return;
+		}
+		wss.handleUpgrade(req, socket, head, (ws) => hub.attach(ws, machine));
+	});
 	ctx.effect(
-		() =>
-			ctx.webServer.registerUpgrade({
-				path: AGENT_PATH,
-				handler(req, socket, head) {
-					const machine = authorize(req);
-					if (!machine) {
-						socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
-						socket.destroy();
-						return;
-					}
-					wss.handleUpgrade(req, socket, head, (ws) => hub.attach(ws, machine));
-				},
-			}),
-		"remote-shell: agent websocket",
+		() => {
+			agentServer.listen(AGENT_PORT, AGENT_HOST, () => {
+				console.info(`[remote-shell] agent listener on ${AGENT_HOST}:${AGENT_PORT}${AGENT_PATH}`);
+			});
+			return () => {
+				try {
+					agentServer.close();
+				} catch {}
+			};
+		},
+		"remote-shell: agent listener",
 	);
 
 	ctx.effect(
@@ -402,6 +418,7 @@ export function apply(ctx) {
 									os: { type: "string" },
 									arch: { type: "string" },
 									status: { type: "string", required: true },
+									created_at: { type: "string", required: true },
 									last_seen: { type: "string" },
 								},
 							},
@@ -494,6 +511,9 @@ export function apply(ctx) {
 			hub.closeAll();
 			try {
 				wss.close();
+			} catch {}
+			try {
+				agentServer.close();
 			} catch {}
 		},
 		"remote-shell: dispose",

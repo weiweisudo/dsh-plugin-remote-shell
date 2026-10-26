@@ -4,13 +4,14 @@ DSH bundle（host + client），负责机器台账、WS 端点和工具注册。
 
 ## Host 侧
 
-- `webServer.registerUpgrade('/api/remote-shell/agent')`
+- 专用 HTTP 监听（默认 `0.0.0.0:47777`，`REMOTE_SHELL_AGENT_PORT` 可改）
+- `/api/remote-shell/agent` WebSocket upgrade
 - 机器台账：`~/.dsh/remote-shell/machines.json`（600）
 - token 哈希：`~/.dsh/remote-shell/secrets.json`（600）
 - 工具：`remote_hosts`、`remote_exec`
 - 心跳超时 90s 标记离线
 
-参考 `dsh-server-deck` 的 `registerUpgrade` + `WebSocketServer({ noServer: true })` 模式。
+参考 `dsh-server-deck` 的 `WebSocketServer({ noServer: true })` 模式；不挂在 DSH web 端口上，避免被 lanmode 认证拦截。
 
 ## Client 侧
 

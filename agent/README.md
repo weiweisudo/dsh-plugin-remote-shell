@@ -13,7 +13,7 @@ Go 单文件 agent，计划从 [mcp-windows-remote-shell](https://github.com/laa
 ## P0 启动参数（草案）
 
 ```
-remote-agent --server wss://dsh6.potatooo.top:777/api/remote-shell/agent \
+remote-agent --server ws://192.168.5.8:47777/api/remote-shell/agent \
              --machine-id m_xxx --token-file token.txt --name "Windows PC"
 ```
 
