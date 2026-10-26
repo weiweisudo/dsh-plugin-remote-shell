@@ -16,3 +16,6 @@ token.txt
 
 # build output
 /dist/
+
+# local binaries
+/agent/relay-agent

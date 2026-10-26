@@ -63,31 +63,42 @@ type execResponse struct {
 }
 
 type config struct {
-	port      int
-	timeout   time.Duration
-	token     string
-	serverURL string
-	machineID string
-	name      string
+	port            int
+	timeout         time.Duration
+	token           string
+	serverURL       string
+	machineID       string
+	name            string
+	pairSecret      string
+	credentialsFile string
+	onStatus        func(workerStatus)
 }
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.LUTC)
+	if handled, err := platformEarly(os.Args); handled {
+		if err != nil {
+			log.Fatalf("fatal: %v", err)
+		}
+		return
+	}
 
 	var (
-		port      = flag.Int("port", envInt("RELAY_PORT", 47600), "local HTTP port (always bound to 127.0.0.1)")
-		timeout   = flag.Int("timeout", envInt("RELAY_TIMEOUT", 30), "default per-command timeout, in seconds")
-		tokenFile = flag.String("token-file", os.Getenv("RELAY_TOKEN_FILE"), "file holding the bearer token (alternative to RELAY_TOKEN)")
-		server    = flag.String("server", os.Getenv("RELAY_SERVER"), "outbound WebSocket URL, e.g. wss://dsh.example/api/remote-shell/agent")
-		machineID = flag.String("machine-id", os.Getenv("RELAY_MACHINE_ID"), "machine id registered in the DSH plugin")
-		name      = flag.String("name", os.Getenv("RELAY_MACHINE_NAME"), "display name reported to the plugin")
-		genToken  = flag.Bool("gen-token", false, "print a fresh random token and exit")
-		showVer   = flag.Bool("version", false, "print version and exit")
+		port        = flag.Int("port", envInt("RELAY_PORT", 47600), "local HTTP port (always bound to 127.0.0.1)")
+		timeout     = flag.Int("timeout", envInt("RELAY_TIMEOUT", 30), "default per-command timeout, in seconds")
+		tokenFile   = flag.String("token-file", os.Getenv("RELAY_TOKEN_FILE"), "file holding the bearer token (legacy local/static mode)")
+		server      = flag.String("server", os.Getenv("RELAY_SERVER"), "outbound WebSocket URL, e.g. wss://dsh.example/api/remote-shell/agent")
+		machineID   = flag.String("machine-id", os.Getenv("RELAY_MACHINE_ID"), "machine id registered in the DSH plugin (device mode)")
+		name        = flag.String("name", os.Getenv("RELAY_MACHINE_NAME"), "display name reported to the plugin")
+		pair        = flag.String("pair", "", "one-time pairing link: ws://host:47777/api/remote-shell/agent#secret")
+		credentials = flag.String("credentials", envString("RELAY_CREDENTIALS", defaultCredentialsPath()), "device credentials file")
+		genToken    = flag.Bool("gen-token", false, "print a fresh random token and exit")
+		showVer     = flag.Bool("version", false, "print version and exit")
 	)
 	flag.Parse()
 
 	if *showVer {
-		fmt.Println("relay-agent", version)
+		fmt.Println("remote-agent", version)
 		return
 	}
 	if *genToken {
@@ -97,35 +108,76 @@ func main() {
 	if *timeout <= 0 || *timeout > int(maxTimeout/time.Second) {
 		log.Fatalf("startup: --timeout must be between 1 and 3600 seconds")
 	}
+	if *name == "" {
+		*name, _ = os.Hostname()
+	}
+
+	cfg := config{
+		port:            *port,
+		timeout:         time.Duration(*timeout) * time.Second,
+		serverURL:       strings.TrimSpace(*server),
+		machineID:       strings.TrimSpace(*machineID),
+		name:            strings.TrimSpace(*name),
+		credentialsFile: *credentials,
+	}
+
+	if strings.TrimSpace(*pair) != "" {
+		endpoint, secret, err := parsePairLink(*pair)
+		if err != nil {
+			log.Fatalf("startup: %v", err)
+		}
+		cfg.serverURL = endpoint
+		cfg.pairSecret = secret
+		cfg.machineID = ""
+		if err := runOutbound(&cfg); err != nil {
+			log.Fatalf("fatal: %v", err)
+		}
+		return
+	}
+
+	// No explicit endpoint: reuse the device credential saved after pairing.
+	if cfg.serverURL == "" {
+		if c, err := loadCredentials(cfg.credentialsFile); err == nil {
+			cfg.serverURL = c.Endpoint
+			cfg.machineID = c.MachineID
+			cfg.token = c.Token
+		} else if !errors.Is(err, os.ErrNotExist) {
+			log.Printf("credentials: %v", err)
+		}
+	}
+
+	if cfg.serverURL != "" {
+		if cfg.machineID == "" {
+			log.Fatalf("startup: --machine-id is required in device mode")
+		}
+		if cfg.token == "" {
+			token, err := loadToken(*tokenFile)
+			if err != nil {
+				log.Fatalf("startup: %v", err)
+			}
+			cfg.token = token
+		}
+		if err := runOutbound(&cfg); err != nil {
+			log.Fatalf("fatal: %v", err)
+		}
+		return
+	}
 
 	token, err := loadToken(*tokenFile)
 	if err != nil {
 		log.Fatalf("startup: %v", err)
 	}
-
-	if *name == "" {
-		*name, _ = os.Hostname()
-	}
-	cfg := config{
-		port:      *port,
-		timeout:   time.Duration(*timeout) * time.Second,
-		token:     token,
-		serverURL: strings.TrimSpace(*server),
-		machineID: strings.TrimSpace(*machineID),
-		name:      strings.TrimSpace(*name),
-	}
-	if cfg.serverURL != "" {
-		if cfg.machineID == "" {
-			log.Fatalf("startup: --machine-id is required with --server")
-		}
-		if err := runOutbound(cfg); err != nil {
-			log.Fatalf("fatal: %v", err)
-		}
-		return
-	}
+	cfg.token = token
 	if err := runLocal(cfg); err != nil {
 		log.Fatalf("fatal: %v", err)
 	}
+}
+
+func envString(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
 }
 
 // run is kept for the upstream test suite; production uses runLocal/runOutbound.

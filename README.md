@@ -1,8 +1,8 @@
 # dsh-plugin-remote-shell
 
-DSH 的远程机器管理插件（P0 阶段）。
+DSH 的远程机器管理插件。
 
-目标：被控端（Windows / Linux）**主动出站**连接 DSH，由 DSH 统一管理已授权机器并下发非交互命令；后续增加交互终端（PTY）和文件传输。
+目标：被控端（Windows / Linux）**主动出站**连接 DSH，由 DSH 生成一次性配对链接、自动登记机器并下发命令；后续增加交互终端（PTY）和文件传输。
 
 ## 为什么
 
@@ -14,8 +14,10 @@ DSH 的远程机器管理插件（P0 阶段）。
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
-| P0 | 出站连接 + 机器台账 + `remote_exec` | Linux 验收通过；Windows 待冒烟 |
-| P1 | 配对码、token 轮换、审计 | 未开始 |
+| P0 | 出站连接 + 机器台账 + `remote_exec` | Linux 验收通过 |
+| P0.5 | 配对链接 / 自动注册 / 180 天凭证 / 插件明暗主题 | Linux 验收通过 |
+| P0.5-Win | 托盘 + 本地设置 UI + Windows 服务 | 已交叉编译，待 Windows 实机验收 |
+| P1 | 审计、续期细节、更多设备管理 | 未开始 |
 | P2 | 交互终端（ConPTY / pty） | 未开始 |
 | P3 | 文件传输（白名单目录） | 未开始 |
 
@@ -23,41 +25,80 @@ DSH 的远程机器管理插件（P0 阶段）。
 
 ```
 Windows / Linux 目标机
-  └─ remote-agent（Go 单文件，普通用户运行）
-        │ 出站 WebSocket（心跳 + 重连）
+  └─ remote-agent（Go 单文件）
+        │ 出站 WebSocket（配对 / 设备凭证 + 心跳 + 重连）
         ▼
-DSH 插件「远程机器」（专用端口 47777，可配置）
-  ├─ /api/remote-shell/agent      注册、心跳、命令、后续 PTY/文件复用
-  ├─ 机器台账（已授权、状态、token、允许目录）
+DSH 插件「远程机器」监听 0.0.0.0:47777
+  ├─ /api/remote-shell/agent      配对、注册、心跳、命令
+  ├─ 机器台账（设备凭证只存 SHA-256）
   ├─ 工具：remote_hosts / remote_exec
-  └─ 设置页：机器列表、创建/撤销、token 一次性展示
+  └─ 设置页：生成一次性链接、自动列表、撤销、明暗跟随 DSH
 ```
 
-## P0 范围
+## 配对流程
 
-- agent 从 [mcp-windows-remote-shell](https://github.com/laatortuejaune/mcp-windows-remote-shell) 的 Go agent 派生（MIT）
-- 去掉 Cloudflare Worker / MCP server 依赖
-- 增加主动出站 WebSocket 模式（插件专用端口 47777）
-- DSH 插件：WS 端点、机器台账、`remote_hosts`、`remote_exec`
-- Linux 端到端验收；Windows 交叉编译 + 局域网冒烟
+1. 在 DSH 插件页点「生成连接链接」
+2. 得到一次性链接（5 分钟有效，secret 在 `#` fragment 中）：
 
-详细计划见 [docs/P0.md](docs/P0.md)。
+```
+ws://192.168.5.8:47777/api/remote-shell/agent#<SECRET>
+```
+
+3. 在目标机运行：
+
+```bash
+remote-agent --pair 'ws://192.168.5.8:47777/api/remote-shell/agent#<SECRET>'
+```
+
+4. agent 首次连接后自动登记，并保存 **180 天设备凭证**
+5. 之后直接运行 `remote-agent` 即可用凭证重连，不再需要链接
+
+DSH 侧不再需要“先创建机器”。
+
+## Windows Agent
+
+单文件 `remote-agent.exe`，默认托盘模式：
+
+```powershell
+# 单机托盘 + 本地设置页
+.\remote-agent.exe
+
+# 安装/解除 Windows 服务（需管理员）
+.\remote-agent.exe service install
+.\remote-agent.exe service uninstall
+```
+
+- 托盘菜单：打开设置 / 重连 / 安装服务 / 解除服务 / 退出
+- 关闭浏览器设置页不会退出；托盘继续运行
+- 本地设置页端口：`49777–49796` 自动避让，仅绑 `127.0.0.1`
+- 服务模式：LocalSystem、自动启动、失败重启；无托盘/窗口
+- 设置页跟随 **Windows 系统明暗**
+
+## Linux Agent
+
+保留 headless 二进制，不做 GUI/服务安装器：
+
+```bash
+./remote-agent-linux-amd64 --pair 'ws://192.168.5.8:47777/api/remote-shell/agent#<SECRET>'
+```
+
+Linux 其他机器优先建议 SSH；agent 只用于没有 sshd / NAT 后的边缘场景。
 
 ## 目录
 
 ```
-agent/    Go agent（P0 已实现）
-plugin/   DSH 插件 bundle（P0 已实现）
-docs/     计划、协议、许可说明
+agent/    Go agent（Linux headless + Windows tray/service）
+plugin/   DSH 插件 bundle
+docs/     计划、验收、Windows 说明
 ```
 
 ## 安全
 
 - agent 仅以运行它的用户权限执行命令，**不提供提权**
-- token 只在创建时显示一次；插件侧只存 SHA-256 哈希，不回显
-- agent 端口默认 `0.0.0.0:47777`，仅 token 保护；不要直接映射到公网
+- 配对 secret 只存 SHA-256；一次性、5 分钟
+- 设备凭证 180 天，插件侧只存哈希；撤销后立即断开
+- 插件 agent 端口默认 `0.0.0.0:47777`，仅 token 保护；不要直接映射公网
 - 文件传输阶段必须使用目录白名单（P3）
-- 只处理已授权机器
 
 ## 许可
 

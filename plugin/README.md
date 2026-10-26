@@ -1,35 +1,44 @@
-# plugin（P0 待实现）
+# plugin
 
-DSH bundle（host + client），负责机器台账、WS 端点和工具注册。
+DSH bundle（host + client）：配对、机器台账、WS 端点和工具注册。
 
-## Host 侧
+## Host
 
 - 专用 HTTP 监听（默认 `0.0.0.0:47777`，`REMOTE_SHELL_AGENT_PORT` 可改）
-- `/api/remote-shell/agent` WebSocket upgrade
-- 机器台账：`~/.dsh/remote-shell/machines.json`（600）
-- token 哈希：`~/.dsh/remote-shell/secrets.json`（600）
+- `/api/remote-shell/agent` WebSocket
+- `POST /api/remote-shell/pairings` 生成一次性链接（5 分钟）
+- `GET /api/remote-shell/pairings` 等待中的配对
+- `GET /api/remote-shell/machines` 机器列表
+- `DELETE /api/remote-shell/machines/:id` 撤销
 - 工具：`remote_hosts`、`remote_exec`
-- 心跳超时 90s 标记离线
+- 配对 secret / 设备 token 只存 SHA-256；设备凭证 180 天
 
-参考 `dsh-server-deck` 的 `WebSocketServer({ noServer: true })` 模式；不挂在 DSH web 端口上，避免被 lanmode 认证拦截。
-
-## Client 侧
-
-- 侧边栏「远程机器」页签
-- 机器列表：名称、平台、状态、最后在线
-- 状态徽章：在线 / 离线 / 连接中
-- P0 只放一个测试命令输入框；终端入口留到 P1
-
-## 配置
+状态文件：
 
 ```
 ~/.dsh/remote-shell/machines.json
 ~/.dsh/remote-shell/secrets.json
-~/.dsh/logs/remote-shell.jsonl
+~/.dsh/remote-shell/pairings.json
 ```
 
-## 安全
+不挂在 DSH web 端口上，避免被 lanmode 认证拦截。
 
-- 不存明文 token
-- WS 注册必须校验 token
-- 不提供提权
+## Client
+
+- 设置页「远程机器」
+- 生成一次性连接链接 + 复制命令 + 5 分钟倒计时
+- agent 连上后自动出现在机器列表，无需先创建
+- 在线 / 离线、系统、凭证到期、最后在线、撤销
+- 跟随 DSH Web 明暗：监听 `body[data-ds-dark-theme]`
+
+## 本地开发
+
+```bash
+cd plugin
+npm install
+node --check lib/index.mjs
+node --check lib/client.js
+node test/e2e.mjs
+```
+
+`@deepseek-ai/dsh-tools` 由 DSH profile 提供；本地测试时链接到 profile 的 `node_modules`。

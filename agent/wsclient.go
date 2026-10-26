@@ -32,6 +32,8 @@ type wireMessage struct {
 	OS             string `json:"os,omitempty"`
 	Arch           string `json:"arch,omitempty"`
 	Version        string `json:"version,omitempty"`
+	DeviceToken    string `json:"device_token,omitempty"`
+	ExpiresAt      string `json:"expires_at,omitempty"`
 	Time           string `json:"time,omitempty"`
 	Command        string `json:"command,omitempty"`
 	TimeoutSeconds int    `json:"timeout_seconds,omitempty"`
@@ -44,12 +46,25 @@ type wireMessage struct {
 	Error          string `json:"error,omitempty"`
 }
 
+type workerStatus struct {
+	Online    bool
+	MachineID string
+	ExpiresAt string
+	Error     string
+}
+
 type fatalError struct{ err error }
 
 func (e fatalError) Error() string { return e.err.Error() }
 func (e fatalError) Unwrap() error { return e.err }
 
-func runOutbound(cfg config) error {
+func runOutbound(cfg *config) error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return runOutboundContext(ctx, cfg)
+}
+
+func runOutboundContext(ctx context.Context, cfg *config) error {
 	u, err := url.Parse(cfg.serverURL)
 	if err != nil {
 		return fmt.Errorf("invalid --server: %w", err)
@@ -57,12 +72,9 @@ func runOutbound(cfg config) error {
 	if u.Scheme != "ws" && u.Scheme != "wss" {
 		return fmt.Errorf("invalid --server: scheme must be ws or wss")
 	}
-	if cfg.token == "" {
-		return errors.New("invalid agent configuration: empty token")
+	if cfg.token == "" && cfg.pairSecret == "" {
+		return errors.New("invalid agent configuration: empty token and pairing secret")
 	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 
 	backoff := time.Second
 	for {
@@ -97,10 +109,21 @@ func runOutbound(cfg config) error {
 	}
 }
 
-func connectOutbound(ctx context.Context, cfg config) (bool, error) {
+func connectOutbound(ctx context.Context, cfg *config) (bool, error) {
+	defer func() {
+		if cfg.onStatus != nil {
+			cfg.onStatus(workerStatus{Online: false})
+		}
+	}()
 	header := http.Header{}
-	header.Set("Authorization", "Bearer "+cfg.token)
-	header.Set("X-Machine-Id", cfg.machineID)
+	authToken := cfg.token
+	if cfg.pairSecret != "" {
+		authToken = cfg.pairSecret
+	}
+	header.Set("Authorization", "Bearer "+authToken)
+	if cfg.machineID != "" {
+		header.Set("X-Machine-Id", cfg.machineID)
+	}
 
 	dialer := *websocket.DefaultDialer
 	dialer.HandshakeTimeout = 15 * time.Second
@@ -207,7 +230,24 @@ func connectOutbound(ctx context.Context, cfg config) (bool, error) {
 		_ = conn.SetReadDeadline(time.Now().Add(wsPongWait))
 		switch msg.Type {
 		case "hello_ok":
-			log.Printf("outbound: registered machine_id=%s name=%s", cfg.machineID, hostname)
+			if msg.DeviceToken != "" {
+				cfg.token = msg.DeviceToken
+				cfg.pairSecret = ""
+				if msg.MachineID != "" {
+					cfg.machineID = msg.MachineID
+				}
+				if err := saveCredentials(cfg.credentialsFile, cfg.serverURL, cfg.machineID, cfg.token, msg.ExpiresAt); err != nil {
+					log.Printf("credentials: save failed: %v", err)
+				} else {
+					log.Printf("credentials: saved machine_id=%s expires=%s", cfg.machineID, msg.ExpiresAt)
+				}
+				log.Printf("outbound: paired machine_id=%s expires=%s", cfg.machineID, msg.ExpiresAt)
+			} else {
+				log.Printf("outbound: registered machine_id=%s expires=%s", cfg.machineID, msg.ExpiresAt)
+			}
+			if cfg.onStatus != nil {
+				cfg.onStatus(workerStatus{Online: true, MachineID: cfg.machineID, ExpiresAt: msg.ExpiresAt})
+			}
 		case "ping":
 			_ = send(wireMessage{Type: "pong", Time: time.Now().UTC().Format(time.RFC3339)})
 		case "exec":

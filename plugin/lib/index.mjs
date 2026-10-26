@@ -15,6 +15,11 @@ const AGENT_HOST = process.env.REMOTE_SHELL_LISTEN_HOST || "0.0.0.0";
 const AGENT_PORT = Math.max(1, Math.min(65535, Number(process.env.REMOTE_SHELL_AGENT_PORT) || 47777));
 const MACHINES_FILE = join(STATE_DIR, "machines.json");
 const SECRETS_FILE = join(STATE_DIR, "secrets.json");
+const PAIRINGS_FILE = join(STATE_DIR, "pairings.json");
+
+const PAIRING_TTL_MS = 5 * 60 * 1000;
+const DEVICE_TTL_MS = 180 * 24 * 60 * 60 * 1000;
+const RENEW_BEFORE_MS = 30 * 24 * 60 * 60 * 1000;
 
 const nowISO = () => new Date().toISOString();
 
@@ -34,7 +39,6 @@ function writeJSON(file, value) {
 	try {
 		chmodSync(tmp, 0o600);
 	} catch {}
-	// rename is atomic on the same filesystem
 	try {
 		renameSync(tmp, file);
 	} catch {
@@ -51,17 +55,25 @@ function safeEqualHex(a, b) {
 	return timingSafeEqual(Buffer.from(a), Buffer.from(b));
 }
 
+function randomToken() {
+	return randomBytes(32).toString("base64url");
+}
+
 class MachineStore {
 	constructor() {
 		this.machines = readJSON(MACHINES_FILE, { machines: [] });
-		this.secrets = readJSON(SECRETS_FILE, { tokens: {} });
+		this.secrets = readJSON(SECRETS_FILE, { tokens: {}, pairings: {} });
+		this.pairings = readJSON(PAIRINGS_FILE, { pairings: [] });
 		if (!Array.isArray(this.machines.machines)) this.machines.machines = [];
+		if (!Array.isArray(this.pairings.pairings)) this.pairings.pairings = [];
 		if (typeof this.secrets.tokens !== "object" || this.secrets.tokens === null) this.secrets.tokens = {};
+		if (typeof this.secrets.pairings !== "object" || this.secrets.pairings === null) this.secrets.pairings = {};
 	}
 
 	save() {
 		writeJSON(MACHINES_FILE, this.machines);
 		writeJSON(SECRETS_FILE, this.secrets);
+		writeJSON(PAIRINGS_FILE, this.pairings);
 	}
 
 	list() {
@@ -83,28 +95,104 @@ class MachineStore {
 		return fuzzy.length === 1 ? fuzzy[0] : null;
 	}
 
-	create(name) {
+	createPairing(label) {
+		const secret = randomToken();
+		const pairing = {
+			id: `p_${randomBytes(6).toString("hex")}`,
+			label: String(label || "").slice(0, 80),
+			created_at: nowISO(),
+			expires_at: new Date(Date.now() + PAIRING_TTL_MS).toISOString(),
+			used_at: null,
+		};
+		this.pairings.pairings.push(pairing);
+		this.secrets.pairings[pairing.id] = tokenHash(secret);
+		this.save();
+		return { pairing, secret };
+	}
+
+	pendingPairings() {
+		const now = Date.now();
+		return this.pairings.pairings
+			.filter((p) => !p.used_at && Date.parse(p.expires_at) > now)
+			.map((p) => ({
+				id: p.id,
+				label: p.label,
+				created_at: p.created_at,
+				expires_at: p.expires_at,
+			}));
+	}
+
+	findPairing(id) {
+		return this.pairings.pairings.find((p) => p.id === id);
+	}
+
+	findPairingBySecret(secret) {
+		const hash = tokenHash(secret);
+		for (const pairing of this.pairings.pairings) {
+			if (pairing.used_at) continue;
+			if (Date.parse(pairing.expires_at) <= Date.now()) continue;
+			if (safeEqualHex(this.secrets.pairings[pairing.id], hash)) return pairing;
+		}
+		return null;
+	}
+
+	cancelPairing(id) {
+		const before = this.pairings.pairings.length;
+		this.pairings.pairings = this.pairings.pairings.filter((p) => p.id !== id);
+		delete this.secrets.pairings[id];
+		if (before !== this.pairings.pairings.length) this.save();
+		return before !== this.pairings.pairings.length;
+	}
+
+	createDeviceForPairing(pairing, hello) {
 		const id = `m_${randomBytes(6).toString("hex")}`;
-		const token = randomBytes(32).toString("hex");
+		const token = randomToken();
+		const expires = new Date(Date.now() + DEVICE_TTL_MS).toISOString();
 		const machine = {
 			id,
-			name: String(name || id).slice(0, 80),
-			os: "",
-			arch: "",
-			status: "offline",
+			name: String(hello.name || pairing.label || id).slice(0, 80),
+			os: String(hello.os || ""),
+			arch: String(hello.arch || ""),
+			status: "online",
 			created_at: nowISO(),
-			last_seen: null,
+			last_seen: nowISO(),
+			device_expires_at: expires,
 		};
 		this.machines.machines.push(machine);
 		this.secrets.tokens[id] = tokenHash(token);
+		pairing.used_at = nowISO();
 		this.save();
-		return { machine, token };
+		return { machine, token, expires };
+	}
+
+	verifyDevice(id, token) {
+		const expected = this.secrets.tokens[id];
+		return typeof expected === "string" && safeEqualHex(expected, tokenHash(token));
+	}
+
+	rotateDevice(id) {
+		const machine = this.get(id);
+		if (!machine) return null;
+		const token = randomToken();
+		const expires = new Date(Date.now() + DEVICE_TTL_MS).toISOString();
+		this.secrets.tokens[id] = tokenHash(token);
+		machine.device_expires_at = expires;
+		this.save();
+		return { token, expires };
 	}
 
 	touch(id, patch = {}) {
 		const m = this.get(id);
 		if (!m) return null;
 		Object.assign(m, patch, { last_seen: nowISO() });
+		this.save();
+		return m;
+	}
+
+	rename(id, name) {
+		const m = this.get(id);
+		if (!m) return null;
+		m.name = String(name || m.name).slice(0, 80);
 		this.save();
 		return m;
 	}
@@ -117,28 +205,24 @@ class MachineStore {
 		if (changed) this.save();
 		return changed;
 	}
-
-	verify(id, token) {
-		const expected = this.secrets.tokens[id];
-		return typeof expected === "string" && safeEqualHex(expected, tokenHash(token));
-	}
 }
 
 class MachineHub {
 	constructor(store) {
 		this.store = store;
 		this.agents = new Map(); // machineId -> { ws, lastSeen, pingTimer }
-		this.pending = new Map(); // request id -> { resolve, reject, timer, machineId }
+		this.pairingAgents = new Set();
+		this.pending = new Map();
 	}
 
-	attach(ws, machine) {
+	attachDevice(ws, machine, issued = null) {
 		if (this.agents.has(machine.id)) {
 			ws.close(4009, "machine already connected");
 			return;
 		}
-		const entry = { ws, lastSeen: Date.now(), pingTimer: null };
+		const entry = { ws, machineId: machine.id, lastSeen: Date.now(), pingTimer: null };
 		this.agents.set(machine.id, entry);
-		this.store.touch(machine.id, { status: "online" });
+		this.store.touch(machine.id, { status: "online", os: machine.os, arch: machine.arch });
 		console.info(`[remote-shell] agent online: ${machine.id} ${machine.name || ""}`);
 
 		entry.pingTimer = setInterval(() => {
@@ -151,7 +235,56 @@ class MachineHub {
 		ws.on("message", (data) => this.onMessage(machine.id, entry, data));
 		ws.on("close", () => this.detach(machine.id, entry));
 		ws.on("error", () => {});
-		this.send(machine.id, { type: "hello_ok", time: nowISO() });
+		if (!issued && machine.device_expires_at) {
+			const remaining = Date.parse(machine.device_expires_at) - Date.now();
+			if (remaining < RENEW_BEFORE_MS) issued = this.store.rotateDevice(machine.id);
+		}
+		const payload = {
+			type: "hello_ok",
+			machine_id: machine.id,
+			name: machine.name,
+			expires_at: machine.device_expires_at,
+			time: nowISO(),
+		};
+		if (issued) payload.device_token = issued.token;
+		this.send(machine.id, payload);
+	}
+
+	attachPairing(ws, pairing) {
+		const entry = { ws, pairingId: pairing.id, lastSeen: Date.now(), timer: null };
+		this.pairingAgents.add(entry);
+		const cleanup = () => {
+			if (entry.timer) clearTimeout(entry.timer);
+			this.pairingAgents.delete(entry);
+		};
+		entry.timer = setTimeout(() => {
+			try {
+				ws.close(4002, "pairing hello timeout");
+			} catch {}
+			cleanup();
+		}, 30_000);
+		ws.on("close", cleanup);
+		ws.once("message", (data) => {
+			cleanup();
+			ws.off("close", cleanup);
+			let msg;
+			try {
+				msg = JSON.parse(String(data));
+			} catch {
+				ws.close(1007, "invalid JSON");
+				return;
+			}
+			if (msg.type !== "hello") {
+				ws.close(4002, "hello required");
+				return;
+			}
+			if (pairing.used_at) {
+				ws.close(4003, "pairing already used");
+				return;
+			}
+			const { machine, token, expires } = this.store.createDeviceForPairing(pairing, msg);
+			this.attachDevice(ws, { ...machine, device_expires_at: expires }, { token });
+		});
 	}
 
 	onMessage(machineId, entry, raw) {
@@ -239,6 +372,7 @@ class MachineHub {
 				arch: m.arch || "",
 				status: live ? "online" : "offline",
 				created_at: m.created_at,
+				...(m.device_expires_at ? { expires_at: m.device_expires_at } : {}),
 				...(live
 					? { last_seen: new Date(live.lastSeen).toISOString() }
 					: m.last_seen
@@ -289,6 +423,13 @@ class MachineHub {
 			} catch {}
 			this.agents.delete(id);
 		}
+		for (const entry of this.pairingAgents) {
+			if (entry.timer) clearTimeout(entry.timer);
+			try {
+				entry.ws.close(1001, "server shutting down");
+			} catch {}
+		}
+		this.pairingAgents.clear();
 	}
 }
 
@@ -308,11 +449,18 @@ async function readBody(req) {
 	}
 }
 
-function agentCommand(req, machineId) {
-	const proto = process.env.REMOTE_SHELL_AGENT_TLS === "1" ? "wss" : "ws";
+function requestHost(req) {
 	const hostHeader = String(req.headers["x-forwarded-host"] || req.headers.host || "127.0.0.1");
-	const hostname = hostHeader.replace(/:[0-9]+$/, "");
-	return `remote-agent --server ${proto}://${hostname}:${AGENT_PORT}${AGENT_PATH} --machine-id ${machineId} --token-file token.txt`;
+	return hostHeader.replace(/:[0-9]+$/, "").replace(/^\[|\]$/g, "");
+}
+
+function pairingLink(req, secret) {
+	const proto = process.env.REMOTE_SHELL_AGENT_TLS === "1" ? "wss" : "ws";
+	return `${proto}://${requestHost(req)}:${AGENT_PORT}${AGENT_PATH}#${secret}`;
+}
+
+function agentCommand(link) {
+	return `remote-agent --pair "${link}"`;
 }
 
 export function apply(ctx) {
@@ -323,12 +471,16 @@ export function apply(ctx) {
 	const authorize = (req) => {
 		const header = String(req.headers.authorization || "");
 		const match = /^Bearer\s+(.+)$/i.exec(header);
+		if (!match) return null;
 		const machineId = String(req.headers["x-machine-id"] || "");
-		if (!match || !machineId) return null;
-		const machine = store.get(machineId);
-		if (!machine) return null;
-		if (!store.verify(machineId, match[1])) return null;
-		return machine;
+		if (machineId) {
+			const machine = store.get(machineId);
+			if (!machine || !store.verifyDevice(machineId, match[1])) return null;
+			return { kind: "device", machine };
+		}
+		const pairing = store.findPairingBySecret(match[1]);
+		if (!pairing) return null;
+		return { kind: "pairing", pairing };
 	};
 
 	// The DSH web port is behind lanmode password auth, which also gates
@@ -339,13 +491,16 @@ export function apply(ctx) {
 		res.end("not found");
 	});
 	agentServer.on("upgrade", (req, socket, head) => {
-		const machine = authorize(req);
-		if (!machine) {
+		const auth = authorize(req);
+		if (!auth) {
 			socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
 			socket.destroy();
 			return;
 		}
-		wss.handleUpgrade(req, socket, head, (ws) => hub.attach(ws, machine));
+		wss.handleUpgrade(req, socket, head, (ws) => {
+			if (auth.kind === "pairing") hub.attachPairing(ws, auth.pairing);
+			else hub.attachDevice(ws, auth.machine);
+		});
 	});
 	ctx.effect(
 		() => {
@@ -365,6 +520,34 @@ export function apply(ctx) {
 		() =>
 			ctx.webServer.register({
 				kind: "prefix",
+				path: `${BASE}/pairings`,
+				handler: async (req, res) => {
+					const url = new URL(req.url || "/", "http://local");
+					const rest = url.pathname.slice(`${BASE}/pairings`.length).replace(/^\/+/, "");
+					if (req.method === "GET" && rest === "") {
+						return sendJson(res, 200, { ok: true, pairings: store.pendingPairings() });
+					}
+					if (req.method === "POST" && rest === "") {
+						const body = await readBody(req);
+						if (body === null) return sendJson(res, 400, { ok: false, error: "invalid JSON" });
+						const { pairing, secret } = store.createPairing(body.label);
+						const link = pairingLink(req, secret);
+						return sendJson(res, 200, { ok: true, pairing, link, command: agentCommand(link) });
+					}
+					if (req.method === "DELETE" && rest) {
+						const ok = store.cancelPairing(rest);
+						return sendJson(res, ok ? 200 : 404, { ok });
+					}
+					return sendJson(res, 405, { ok: false, error: "method not allowed" });
+				},
+			}),
+		"remote-shell: pairing api",
+	);
+
+	ctx.effect(
+		() =>
+			ctx.webServer.register({
+				kind: "prefix",
 				path: `${BASE}/machines`,
 				handler: async (req, res) => {
 					const url = new URL(req.url || "/", "http://local");
@@ -372,16 +555,13 @@ export function apply(ctx) {
 					if (req.method === "GET" && rest === "") {
 						return sendJson(res, 200, { ok: true, machines: hub.list() });
 					}
-					if (req.method === "POST" && rest === "") {
+					if (req.method === "PATCH" && rest) {
+						const machine = store.get(rest);
+						if (!machine) return sendJson(res, 404, { ok: false, error: "machine not found" });
 						const body = await readBody(req);
 						if (body === null) return sendJson(res, 400, { ok: false, error: "invalid JSON" });
-						const { machine, token } = store.create(String(body.name || "").trim() || undefined);
-						return sendJson(res, 200, {
-							ok: true,
-							machine,
-							token,
-							command: agentCommand(req, machine.id),
-						});
+						store.rename(machine.id, body.name);
+						return sendJson(res, 200, { ok: true });
 					}
 					if (req.method === "DELETE" && rest) {
 						const machine = store.get(rest);
@@ -419,6 +599,7 @@ export function apply(ctx) {
 									arch: { type: "string" },
 									status: { type: "string", required: true },
 									created_at: { type: "string", required: true },
+									expires_at: { type: "string" },
 									last_seen: { type: "string" },
 								},
 							},
