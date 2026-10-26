@@ -115,6 +115,10 @@ docs/     计划、验收、Windows 说明
 - Windows 上当前 agent 若以普通权限启动，UAC 过滤后是 Medium；需要管理员请安装为服务（LocalSystem）或以管理员身份启动
 - UAC 不能静默绕过；无人值守优先用服务模式
 
+## 签名
+
+Windows 二进制当前未签名，SmartScreen/Defender 可能提示。可选方案见 [Windows 二进制签名](docs/code-signing.md)。
+
 ## 安全
 
 - agent 仅以运行它的用户权限执行命令，**不提供提权**
