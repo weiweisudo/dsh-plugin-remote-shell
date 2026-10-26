@@ -1,0 +1,15 @@
+# build
+agent/bin/
+agent/dist/
+plugin/node_modules/
+*.exe
+*.test
+
+# runtime state
+*.log
+*.jsonl
+
+# secrets
+*.env
+secrets.json
+token.txt
