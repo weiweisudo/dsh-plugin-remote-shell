@@ -3,7 +3,6 @@
 package main
 
 import (
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"os"
@@ -155,26 +154,33 @@ func startCommandShellDir(command, shell, dir string, env []string) (_ *runningC
 	}
 	systemDir := syscall.UTF16ToString(directory[:n])
 	var appPath, commandLine string
-	switch strings.ToLower(strings.TrimSpace(shell)) {
+	scriptPath := ""
+	shellName := strings.ToLower(strings.TrimSpace(shell))
+	switch shellName {
 	case "", "cmd":
 		appPath = systemDir + `\cmd.exe`
 		commandLine = "cmd.exe /d /c " + command
-	case "powershell":
-		encoded, err := encodePowerShell(command)
+	case "powershell", "pwsh":
+		scriptPath, err = writePowerShellScript(command)
 		if err != nil {
 			return nil, err
 		}
-		appPath = systemDir + `\WindowsPowerShell\v1.0\powershell.exe`
-		commandLine = "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand " + encoded
-	case "pwsh":
-		encoded, err := encodePowerShell(command)
-		if err != nil {
-			return nil, err
+		if shellName == "pwsh" {
+			appPath = "pwsh.exe"
+			commandLine = "pwsh.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File " + syscall.EscapeArg(scriptPath)
+		} else {
+			appPath = systemDir + `\WindowsPowerShell\v1.0\powershell.exe`
+			commandLine = "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File " + syscall.EscapeArg(scriptPath)
 		}
-		appPath = "pwsh.exe"
-		commandLine = "pwsh.exe -NoProfile -NonInteractive -EncodedCommand " + encoded
 	default:
 		return nil, fmt.Errorf("unsupported shell %q (use cmd, powershell or pwsh)", shell)
+	}
+	if scriptPath != "" {
+		defer func() {
+			if err != nil {
+				_ = os.Remove(scriptPath)
+			}
+		}()
 	}
 	app, err := syscall.UTF16PtrFromString(appPath)
 	if err != nil {
@@ -232,6 +238,9 @@ func startCommandShellDir(command, shell, dir string, env []string) (_ *runningC
 			return nil
 		},
 		close: func() error {
+			if scriptPath != "" {
+				_ = os.Remove(scriptPath)
+			}
 			return errors.Join(syscall.CloseHandle(job), syscall.CloseHandle(process.Process))
 		},
 	}, nil
@@ -258,19 +267,22 @@ func windowsEnvironmentKey(item string) string {
 	}
 	return strings.ToUpper(item)
 }
-func encodePowerShell(command string) (string, error) {
-	// EncodedCommand is UTF-16LE/base64, so quotes and newlines are preserved
-	// by Windows command-line parsing. Also force UTF-8 console output.
-	script := "[Console]::OutputEncoding = [Text.Encoding]::UTF8; " + command
-	units := utf16.Encode([]rune(script))
-	buf := make([]byte, len(units)*2)
-	for i, unit := range units {
-		buf[i*2] = byte(unit)
-		buf[i*2+1] = byte(unit >> 8)
+func writePowerShellScript(command string) (string, error) {
+	f, err := os.CreateTemp("", "juzi-*.ps1")
+	if err != nil {
+		return "", err
 	}
-	encoded := base64.StdEncoding.EncodeToString(buf)
-	if len(encoded) > 30000 {
-		return "", errors.New("PowerShell command too large for EncodedCommand")
+	path := f.Name()
+	// UTF-8 BOM makes Windows PowerShell 5.1 read Chinese command text correctly.
+	_, writeErr := f.WriteString("\ufeff[Console]::OutputEncoding = [Text.Encoding]::UTF8\r\n" + command + "\r\n")
+	closeErr := f.Close()
+	if writeErr != nil || closeErr != nil {
+		_ = os.Remove(path)
+		if writeErr != nil {
+			return "", writeErr
+		}
+		return "", closeErr
 	}
-	return encoded, nil
+	_ = os.Chmod(path, 0o600)
+	return path, nil
 }

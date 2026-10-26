@@ -80,7 +80,7 @@ remote-agent.exe service stop
 
 ## PowerShell 引号与中文
 
-一次性 `juzi_exec(shell="powershell")` 使用 PowerShell 的 `-EncodedCommand`（UTF-16LE/base64），不再经过 Windows 命令行引号解析，因此 `$x = "abc"` 不会被吞引号。
+一次性 `juzi_exec(shell="powershell")` 使用临时 `.ps1`（UTF-8 BOM）+ `-File`，不再经过 Windows 命令行引号解析，因此 `$x = "abc"` 不会被吞引号。没有用 `-EncodedCommand`，避免被目标机的 ASR/AppLocker 规则拦截。
 
 PowerShell 命令会自动加：
 
