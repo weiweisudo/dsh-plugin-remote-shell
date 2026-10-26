@@ -13,3 +13,6 @@ plugin/node_modules/
 *.env
 secrets.json
 token.txt
+
+# build output
+/dist/
