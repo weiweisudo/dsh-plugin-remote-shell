@@ -554,14 +554,14 @@ window.__ModuleLoader__.load({
 							name: "settings.section",
 							id: "remote-shell",
 							order: 64,
-							label: () => "远程机器",
+							label: () => "桔子会话",
 						},
 						RemoteShellSettings,
 					),
 				);
-				console.info("[remote-shell] registered settings.section");
+				console.info("[juzi] registered settings.section");
 			} catch (error) {
-				console.error("[remote-shell] settings.section registration failed", error);
+				console.error("[juzi] settings.section registration failed", error);
 			}
 		}
 

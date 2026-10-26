@@ -1,6 +1,6 @@
-# dsh-plugin-remote-shell
+# 桔子会话（Juzi Session）
 
-DSH 的远程机器管理插件。
+DSH 的 outbound agent 远程会话插件。工具前缀 `juzi_*`。
 
 目标：被控端（Windows / Linux）**主动出站**连接 DSH，由 DSH 生成一次性配对链接、自动登记机器并下发命令；后续增加交互终端（PTY）和文件传输。
 
@@ -9,6 +9,10 @@ DSH 的远程机器管理插件。
 - [最新 Release](https://github.com/weiweisudo/dsh-plugin-remote-shell/releases/latest)
 - Windows：`remote-agent-windows-amd64.exe`
 - Linux：`remote-agent-linux-amd64`
+
+## 工具路由
+
+先看 [远程类插件怎么选](docs/TOOL-ROUTING.md)。本插件只管理 `juzi_hosts` 里的 outbound agent，不是 Server Deck SSH，也不是 `dsh-remote`。
 
 ## 为什么
 
@@ -20,7 +24,7 @@ DSH 的远程机器管理插件。
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
-| P0 | 出站连接 + 机器台账 + `remote_exec` | Linux 验收通过 |
+| P0 | 出站连接 + 机器台账 + `juzi_exec` | Linux 验收通过 |
 | P0.5 | 配对链接 / 自动注册 / 180 天凭证 / 插件明暗主题 | Linux 验收通过 |
 | P0.5-Win | 托盘 + 本地设置 UI + Windows 服务 | 已交叉编译，待 Windows 实机验收 |
 | P1 | 审计、续期细节、更多设备管理 | 未开始 |
@@ -34,10 +38,10 @@ Windows / Linux 目标机
   └─ remote-agent（Go 单文件）
         │ 出站 WebSocket（配对 / 设备凭证 + 心跳 + 重连）
         ▼
-DSH 插件「远程机器」监听 0.0.0.0:47777
+DSH 插件「桔子会话」监听 0.0.0.0:47777
   ├─ /api/remote-shell/agent      配对、注册、心跳、命令
   ├─ 机器台账（设备凭证只存 SHA-256）
-  ├─ 工具：remote_hosts / remote_exec
+  ├─ 工具：juzi_hosts / juzi_exec / juzi_session_*
   └─ 设置页：生成一次性链接、自动列表、撤销、明暗跟随 DSH
 ```
 
@@ -105,8 +109,8 @@ docs/     计划、验收、Windows 说明
 
 ## 连续执行与权限
 
-- `remote_exec` 是**一次性命令**：每次新 shell，`cd` / 变量不跨命令，没有交互 stdin
-- 需要连续状态时用 `remote_session_*`：持久 shell，每条命令仍返回 exit code / stdout / stderr / cwd
+- `juzi_exec` 是**一次性命令**：每次新 shell，`cd` / 变量不跨命令，没有交互 stdin
+- 需要连续状态时用 `juzi_session_*`：持久 shell，每条命令仍返回 exit code / stdout / stderr / cwd
 - 真正的交互终端（xterm / ConPTY）仍未实现，agent 不需要读终端屏幕
 - Windows 上当前 agent 若以普通权限启动，UAC 过滤后是 Medium；需要管理员请安装为服务（LocalSystem）或以管理员身份启动
 - UAC 不能静默绕过；无人值守优先用服务模式

@@ -270,7 +270,7 @@ class MachineHub {
 		const entry = { ws, machineId: machine.id, lastSeen: Date.now(), pingTimer: null };
 		this.agents.set(machine.id, entry);
 		this.store.touch(machine.id, { status: "online", os: machine.os, arch: machine.arch });
-		console.info(`[remote-shell] agent online: ${machine.id} ${machine.name || ""}`);
+		console.info(`[juzi] agent online: ${machine.id} ${machine.name || ""}`);
 
 		entry.pingTimer = setInterval(() => {
 			if (ws.readyState !== 1) return;
@@ -409,7 +409,7 @@ class MachineHub {
 		for (const [sessionId, owner] of this.sessions) {
 			if (owner === machineId) this.sessions.delete(sessionId);
 		}
-		console.info(`[remote-shell] agent offline: ${machineId}`);
+		console.info(`[juzi] agent offline: ${machineId}`);
 	}
 
 	send(machineId, payload) {
@@ -657,7 +657,7 @@ export function apply(ctx) {
 	ctx.effect(
 		() => {
 			agentServer.listen(AGENT_PORT, AGENT_HOST, () => {
-				console.info(`[remote-shell] agent listener on ${AGENT_HOST}:${AGENT_PORT}${AGENT_PATH}`);
+				console.info(`[juzi] agent listener on ${AGENT_HOST}:${AGENT_PORT}${AGENT_PATH}`);
 			});
 			return () => {
 				try {
@@ -810,9 +810,9 @@ export function apply(ctx) {
 
 	ctx.tools.register(
 		defineTool({
-			name: "remote_hosts",
+			name: "juzi_hosts",
 			description:
-				"List machines registered with THIS remote-shell agent plugin (outbound agent, not the Server Deck SSH ledger). For SSH hosts use server_deck_hosts instead.",
+				"Juzi Session: list machines registered by the outbound Juzi agent. This is NOT the Server Deck SSH ledger and NOT dsh-remote. Use server_deck_hosts for SSH hosts.",
 			parameters: {},
 			output: {
 				schema: {
@@ -865,9 +865,9 @@ export function apply(ctx) {
 
 	ctx.tools.register(
 		defineTool({
-			name: "remote_exec",
+			name: "juzi_exec",
 			description:
-				"Run one non-interactive command on a machine registered with THIS remote-shell agent plugin (outbound agent, not Server Deck SSH). Use server_deck_exec for Server Deck hosts. Each call starts a new shell; no persistent cwd/env.",
+				"Juzi Session: run one non-interactive command on a Juzi outbound-agent machine. Not Server Deck and not dsh-remote. Each call starts a new shell; use juzi_session_* for persistent state.",
 			parameters: {
 				machine: { type: "string", required: true, description: "Machine id or exact name." },
 				command: { type: "string", required: true, description: "Command to run." },
@@ -931,9 +931,9 @@ export function apply(ctx) {
 
 	ctx.tools.register(
 		defineTool({
-			name: "remote_session_open",
+			name: "juzi_session_open",
 			description:
-				"Open a persistent shell session on a remote-shell agent machine. Use remote_session_exec to run commands in it; use remote_exec for one-shot commands. This is not a Server Deck SSH host.",
+				"Juzi Session: open a persistent shell on a Juzi outbound-agent machine. Use juzi_session_exec for commands; juzi_exec for one-shot. Not Server Deck / dsh-remote.",
 			parameters: {
 				machine: { type: "string", required: true, description: "Machine id or exact name." },
 				shell: {
@@ -968,11 +968,11 @@ export function apply(ctx) {
 
 	ctx.tools.register(
 		defineTool({
-			name: "remote_session_exec",
+			name: "juzi_session_exec",
 			description:
-				"Run one command in a persistent remote-shell session. Returns structured stdout/stderr/exit_code/cwd; shell state (cd, variables) persists across calls.",
+				"Juzi Session: run one command in a Juzi persistent shell. Returns structured stdout/stderr/exit_code/cwd; state persists. Not Server Deck / dsh-remote.",
 			parameters: {
-				session_id: { type: "string", required: true, description: "Session id returned by remote_session_open." },
+				session_id: { type: "string", required: true, description: "Session id returned by juzi_session_open." },
 				command: { type: "string", required: true, description: "Command to run." },
 				timeout_ms: { type: "integer", description: "Timeout in ms (1000-3600000), default 60000." },
 			},
@@ -1009,10 +1009,10 @@ export function apply(ctx) {
 
 	ctx.tools.register(
 		defineTool({
-			name: "remote_session_close",
-			description: "Close a persistent remote-shell session and release its process.",
+			name: "juzi_session_close",
+			description: "Juzi Session: close a persistent Juzi shell session and release its process.",
 			parameters: {
-				session_id: { type: "string", required: true, description: "Session id returned by remote_session_open." },
+				session_id: { type: "string", required: true, description: "Session id returned by juzi_session_open." },
 			},
 			output: {
 				schema: {
@@ -1043,5 +1043,5 @@ export function apply(ctx) {
 	);
 
 	const online = hub.onlineIds().length;
-	console.info(`[remote-shell] loaded: ${store.list().length} machines, ${online} online`);
+	console.info(`[juzi] loaded: ${store.list().length} machines, ${online} online`);
 }

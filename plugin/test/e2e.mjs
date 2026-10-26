@@ -82,7 +82,7 @@ if (!pairing?.ok) throw new Error(`create pairing failed: ${JSON.stringify(pairi
 if (!pairing.link.startsWith(prefix + "#")) throw new Error(`configured prefix not used: ${pairing.link}`);
 console.log("pairing link ok");
 
-const hosts = async () => (await tools.remote_hosts.execute({}, {})).machines;
+const hosts = async () => (await tools.juzi_hosts.execute({}, {})).machines;
 const waitOnline = async (ms = 8000) => {
   const end = Date.now() + ms;
   while (Date.now() < end) {
@@ -97,29 +97,29 @@ const waitOnline = async (ms = 8000) => {
 let agent = spawn(agentBin, ["--pair", pairing.link, "--credentials", creds, "--name", "pair-e2e"], { stdio: "inherit" });
 const machine = await waitOnline();
 if (!readFileSync(creds, "utf8").includes(machine.id)) throw new Error("credentials missing machine id");
-const result = await tools.remote_exec.execute({ machine: machine.id, command: "uname -a", timeout_ms: 10000 }, {});
+const result = await tools.juzi_exec.execute({ machine: machine.id, command: "uname -a", timeout_ms: 10000 }, {});
 if (result.exitCode !== 0 || !result.stdout.includes("Linux")) throw new Error(`exec failed: ${JSON.stringify(result)}`);
-const bashResult = await tools.remote_exec.execute(
+const bashResult = await tools.juzi_exec.execute(
   { machine: machine.id, shell: "bash", command: "echo $BASH_VERSION", timeout_ms: 10000 },
   {},
 );
 if (bashResult.exitCode !== 0 || !bashResult.stdout.trim()) throw new Error(`bash shell failed: ${JSON.stringify(bashResult)}`);
 
-const session = await tools.remote_session_open.execute({ machine: machine.id, shell: "bash" }, {});
+const session = await tools.juzi_session_open.execute({ machine: machine.id, shell: "bash" }, {});
 if (!session?.sessionId) throw new Error("session open failed");
-const first = await tools.remote_session_exec.execute(
+const first = await tools.juzi_session_exec.execute(
   { session_id: session.sessionId, command: "cd /tmp && export DSH_SESSION_VALUE=42 && echo first", timeout_ms: 10000 },
   {},
 );
 if (first.exitCode !== 0 || !first.stdout.includes("first")) throw new Error(`session first failed: ${JSON.stringify(first)}`);
-const second = await tools.remote_session_exec.execute(
+const second = await tools.juzi_session_exec.execute(
   { session_id: session.sessionId, command: "pwd; printf 'value=%s\\n' \"$DSH_SESSION_VALUE\"", timeout_ms: 10000 },
   {},
 );
 if (!second.stdout.includes("/tmp") || !second.stdout.includes("value=42")) {
   throw new Error(`session state not preserved: ${JSON.stringify(second)}`);
 }
-await tools.remote_session_close.execute({ session_id: session.sessionId }, {});
+await tools.juzi_session_close.execute({ session_id: session.sessionId }, {});
 console.log("paired + exec ok (cmd default + bash shell + persistent session)");
 
 agent.kill("SIGTERM");

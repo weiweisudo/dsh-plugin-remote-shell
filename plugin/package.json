@@ -1,8 +1,8 @@
 {
   "name": "dsh-plugin-remote-shell",
-  "version": "0.1.0-p0",
+  "version": "0.2.0-juzi",
   "private": true,
-  "description": "DSH 远程机器插件（P0）：被控端主动出站连接，提供 remote_hosts / remote_exec",
+  "description": "桔子会话（Juzi Session）：outbound agent 远程执行、持久 shell 与配对链接",
   "main": "lib/index.mjs",
   "exports": {
     ".": "./lib/index.mjs",
@@ -21,7 +21,9 @@
     },
     "client": {
       "platform": "web",
-      "inject": ["@deepseek-ai/dsh-client-ui-settings"]
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-settings"
+      ]
     }
   }
 }
