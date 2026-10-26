@@ -7,11 +7,31 @@ import (
 	"flag"
 	"os"
 	"time"
+
+	"golang.org/x/sys/windows"
 )
 
 // platformEarly handles Windows-only process modes before the generic flag
 // parser runs. Keeping it here means the Linux build stays headless and small.
+var procAttachConsole = windows.NewLazySystemDLL("kernel32.dll").NewProc("AttachConsole")
+
+const attachParentProcess = ^uint32(0)
+
+func attachParentConsole(args []string) {
+	if len(args) < 2 {
+		return
+	}
+	if r, _, _ := procAttachConsole.Call(uintptr(attachParentProcess)); r == 0 {
+		return
+	}
+	if out, err := os.OpenFile("CONOUT$", os.O_WRONLY, 0); err == nil {
+		os.Stdout = out
+		os.Stderr = out
+	}
+}
+
 func platformEarly(args []string) (bool, error) {
+	attachParentConsole(args)
 	if len(args) < 2 {
 		return true, runDesktop(defaultDesktopConfig())
 	}

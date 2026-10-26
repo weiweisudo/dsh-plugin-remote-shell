@@ -14,7 +14,9 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -49,7 +51,22 @@ type desktopApp struct {
 	mQuit      *systray.MenuItem
 }
 
+func initDesktopLog() {
+	base := os.Getenv("LOCALAPPDATA")
+	if base == "" {
+		return
+	}
+	dir := filepath.Join(base, "dsh-remote-shell")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return
+	}
+	if f, err := os.OpenFile(filepath.Join(dir, "agent.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600); err == nil {
+		log.SetOutput(f)
+	}
+}
+
 func runDesktop(cfg *config) error {
+	initDesktopLog()
 	if cfg == nil {
 		cfg = defaultDesktopConfig()
 	}

@@ -34,7 +34,7 @@ Go 单文件 agent，派生自 [mcp-windows-remote-shell](https://github.com/laa
 
 ```bash
 GOTOOLCHAIN=local CGO_ENABLED=0 GOOS=linux   GOARCH=amd64 go build -o ../dist/remote-agent-linux-amd64 .
-GOTOOLCHAIN=local CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o ../dist/remote-agent-windows-amd64.exe .
+GOTOOLCHAIN=local CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="-H windowsgui" -o ../dist/remote-agent-windows-amd64.exe .
 ```
 
 ## 不做

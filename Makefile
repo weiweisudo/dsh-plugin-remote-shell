@@ -10,7 +10,7 @@ agent-linux:
 	cd agent && GOPROXY=$(GOPROXY) CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GO) build -trimpath -ldflags="-s -w" -o ../dist/remote-agent-linux-amd64 .
 
 agent-windows:
-	cd agent && GOPROXY=$(GOPROXY) CGO_ENABLED=0 GOOS=windows GOARCH=amd64 $(GO) build -trimpath -ldflags="-s -w" -o ../dist/remote-agent-windows-amd64.exe .
+	cd agent && GOPROXY=$(GOPROXY) CGO_ENABLED=0 GOOS=windows GOARCH=amd64 $(GO) build -trimpath -ldflags="-H windowsgui -s -w" -o ../dist/remote-agent-windows-amd64.exe .
 
 test:
 	cd agent && GOPROXY=$(GOPROXY) $(GO) test ./...
