@@ -5,7 +5,7 @@ import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypt
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-export const name = "dsh-plugin-remote-shell";
+export const name = "dsh-plugin-juzi-remote-shell";
 export const inject = ["webServer", "tools"];
 
 const BASE = "/api/remote-shell";

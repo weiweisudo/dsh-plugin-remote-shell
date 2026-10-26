@@ -1,6 +1,6 @@
-// dsh-plugin-remote-shell — client 半（P0.5：配对链接 + 自动注册）
+// dsh-plugin-juzi-remote-shell — 桔子会话 client
 window.__ModuleLoader__.load({
-	id: "dsh-plugin-remote-shell",
+	id: "dsh-plugin-juzi-remote-shell",
 	factory: (require) => {
 		const module = { exports: {} };
 		const exports = module.exports;

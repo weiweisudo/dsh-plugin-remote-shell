@@ -6,7 +6,7 @@ DSH 的 outbound agent 远程会话插件。工具前缀 `juzi_*`。
 
 ## 下载
 
-- [最新 Release](https://github.com/weiweisudo/dsh-plugin-remote-shell/releases/latest)
+- [最新 Release](https://github.com/weiweisudo/juzi-remote-shell/releases/latest)
 - Windows：`remote-agent-windows-amd64.exe`
 - Linux：`remote-agent-linux-amd64`
 

@@ -56,5 +56,5 @@ juzi_session_close
 
 - 人类名称：**桔子会话**
 - 工具前缀：`juzi_`
-- 技术包名暂时保留 `dsh-plugin-remote-shell`（避免破坏 profile link）
+- 技术包名：`dsh-plugin-juzi-remote-shell`；GitHub 仓库：`juzi-remote-shell`
 - 旧 `remote_*` 工具名已移除，避免和 `dsh-remote` 混淆
