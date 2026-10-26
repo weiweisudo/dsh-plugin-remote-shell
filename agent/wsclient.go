@@ -33,6 +33,7 @@ type wireMessage struct {
 	OS             string    `json:"os,omitempty"`
 	Arch           string    `json:"arch,omitempty"`
 	Version        string    `json:"version,omitempty"`
+	Features       []string  `json:"features,omitempty"`
 	DeviceToken    string    `json:"device_token,omitempty"`
 	ExpiresAt      string    `json:"expires_at,omitempty"`
 	Time           string    `json:"time,omitempty"`
@@ -216,6 +217,7 @@ func connectOutbound(ctx context.Context, cfg *config) (bool, error) {
 		OS:        runtime.GOOS,
 		Arch:      runtime.GOARCH,
 		Version:   version,
+		Features:  []string{"jobs", "sessions", "shell"},
 		Time:      time.Now().UTC().Format(time.RFC3339),
 	}); err != nil {
 		return false, fmt.Errorf("hello: %w", err)

@@ -199,6 +199,7 @@ class MachineStore {
 			name: String(hello.name || pairing.label || id).slice(0, 80),
 			os: String(hello.os || ""),
 			arch: String(hello.arch || ""),
+			features: Array.isArray(hello.features) ? hello.features.map(String) : [],
 			status: "online",
 			created_at: nowISO(),
 			last_seen: nowISO(),
@@ -352,6 +353,7 @@ class MachineHub {
 					os: String(msg.os || ""),
 					arch: String(msg.arch || ""),
 					name: String(msg.name || this.store.get(machineId)?.name || machineId).slice(0, 80),
+					features: Array.isArray(msg.features) ? msg.features.map(String) : [],
 					status: "online",
 				});
 				break;
@@ -547,7 +549,15 @@ class MachineHub {
 		};
 	}
 
+	agentSupports(machineId, feature) {
+		const machine = this.store.get(machineId);
+		return Array.isArray(machine?.features) && machine.features.includes(feature);
+	}
+
 	async jobStart(machineId, command, shell = "", cwd = "", name = "") {
+		if (!this.agentSupports(machineId, "jobs")) {
+			throw new Error("this agent does not support async jobs; update remote-agent to p0.5.9 or later");
+		}
 		const result = await this.request(
 			machineId,
 			{ type: "job_start", command, shell, cwd, name },
@@ -596,6 +606,7 @@ class MachineHub {
 		for (const id of ids) {
 			const entry = this.agents.get(id);
 			if (!entry || entry.ws.readyState !== 1) continue;
+			if (!this.agentSupports(id, "jobs")) continue;
 			const machine = this.store.get(id);
 			try {
 				const result = await this.request(id, { type: "job_list" }, 20_000);
