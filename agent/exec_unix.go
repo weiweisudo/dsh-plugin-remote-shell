@@ -15,6 +15,10 @@ func startCommand(command string, env []string) (*runningCommand, error) {
 }
 
 func startCommandShell(command, shell string, env []string) (*runningCommand, error) {
+	return startCommandShellDir(command, shell, "", env)
+}
+
+func startCommandShellDir(command, shell, dir string, env []string) (*runningCommand, error) {
 	shell = strings.ToLower(strings.TrimSpace(shell))
 	if shell == "" {
 		shell = "sh"
@@ -36,6 +40,9 @@ func startCommandShell(command, shell string, env []string) (*runningCommand, er
 		return nil, errors.New("unsupported shell " + shell)
 	}
 	cmd.Env = env
+	if strings.TrimSpace(dir) != "" {
+		cmd.Dir = dir
+	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = pipes.in, pipes.outW, pipes.errW
 	if err := cmd.Start(); err != nil {

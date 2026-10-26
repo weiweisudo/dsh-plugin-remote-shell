@@ -260,6 +260,7 @@ class MachineHub {
 		this.pairingAgents = new Set();
 		this.pending = new Map();
 		this.sessions = new Map(); // sessionId -> machineId
+		this.jobs = new Map(); // jobId -> machineId
 	}
 
 	attachDevice(ws, machine, issued = null) {
@@ -378,12 +379,17 @@ class MachineHub {
 			case "session_opened":
 			case "session_result":
 			case "session_closed":
-			case "session_error": {
+			case "session_error":
+			case "job_started":
+			case "job_status_result":
+			case "job_canceled":
+			case "job_list_result":
+			case "job_error": {
 				const pending = this.pending.get(msg.id);
 				if (!pending) break;
 				clearTimeout(pending.timer);
 				this.pending.delete(msg.id);
-				if (msg.type === "session_error") {
+				if (msg.type === "session_error" || msg.type === "job_error") {
 					pending.reject(new Error(msg.error || "session error"));
 				} else {
 					pending.resolve(msg);
@@ -541,6 +547,91 @@ class MachineHub {
 		};
 	}
 
+	async jobStart(machineId, command, shell = "", cwd = "", name = "") {
+		const result = await this.request(
+			machineId,
+			{ type: "job_start", command, shell, cwd, name },
+			20_000,
+		);
+		this.jobs.set(result.job_id, machineId);
+		return {
+			jobId: result.job_id,
+			name: name || command.slice(0, 80),
+			startedAt: result.started_at || "",
+			status: result.status || "running",
+		};
+	}
+
+	async jobStatus(jobId, waitMs = 0, tailBytes = 32 * 1024) {
+		const machineId = this.jobs.get(jobId);
+		if (!machineId) throw new Error(`job not found: ${jobId}`);
+		const wait = Math.max(0, Math.min(30_000, Number(waitMs) || 0));
+		const result = await this.request(
+			machineId,
+			{ type: "job_status", job_id: jobId, wait_ms: wait, tail_bytes: tailBytes },
+			wait + 10_000,
+		);
+		return this.jobView(result);
+	}
+
+	async jobCancel(jobId) {
+		const machineId = this.jobs.get(jobId);
+		if (!machineId) throw new Error(`job not found: ${jobId}`);
+		const result = await this.request(
+			machineId,
+			{ type: "job_cancel", job_id: jobId },
+			15_000,
+		);
+		return {
+			jobId: result.job_id,
+			status: result.status || "canceled",
+			exitCode: Number(result.exit_code ?? -1),
+			durationMs: Number(result.duration_ms ?? 0),
+		};
+	}
+
+	async jobList(machineId = "") {
+		const ids = machineId ? [machineId] : [...this.agents.keys()];
+		const out = [];
+		for (const id of ids) {
+			const entry = this.agents.get(id);
+			if (!entry || entry.ws.readyState !== 1) continue;
+			const machine = this.store.get(id);
+			try {
+				const result = await this.request(id, { type: "job_list" }, 20_000);
+				const list = Array.isArray(result.jobs) ? result.jobs : [];
+				for (const item of list) {
+					this.jobs.set(item.id, id);
+					out.push({
+						...this.jobView(item),
+						machineId: id,
+						machineName: machine?.name || id,
+					});
+				}
+			} catch {}
+		}
+		return out;
+	}
+
+	jobView(value) {
+		return {
+			jobId: String(value.job_id || value.id || ""),
+			name: String(value.name || ""),
+			command: String(value.command || ""),
+			shell: String(value.shell || ""),
+			cwd: String(value.cwd || ""),
+			status: String(value.status || "running"),
+			exitCode: Number(value.exit_code ?? -1),
+			startedAt: String(value.started_at || ""),
+			durationMs: Number(value.duration_ms ?? 0),
+			bytesOut: Number(value.bytes_out ?? 0),
+			bytesErr: Number(value.bytes_err ?? 0),
+			stdoutTail: String(value.stdout_tail || ""),
+			stderrTail: String(value.stderr_tail || ""),
+			truncated: Boolean(value.truncated),
+		};
+	}
+
 	async sessionClose(sessionId) {
 		const machineId = this.sessions.get(sessionId);
 		if (!machineId) return { ok: true };
@@ -576,6 +667,7 @@ class MachineHub {
 		}
 		this.pairingAgents.clear();
 		this.sessions.clear();
+		this.jobs.clear();
 	}
 }
 
@@ -746,6 +838,31 @@ export function apply(ctx) {
 				},
 			}),
 		"remote-shell: switch link preset",
+	);
+
+	ctx.effect(
+		() =>
+			ctx.webServer.register({
+				kind: "prefix",
+				path: `${BASE}/jobs`,
+				handler: async (req, res) => {
+					const url = new URL(req.url || "/", "http://local");
+					const rest = url.pathname.slice(`${BASE}/jobs`.length).replace(/^\/+/, "");
+					if (req.method === "GET" && rest === "") {
+						return sendJson(res, 200, { ok: true, jobs: await hub.jobList() });
+					}
+					if (req.method === "POST" && rest.endsWith("/cancel")) {
+						const id = rest.slice(0, -"/cancel".length);
+						try {
+							return sendJson(res, 200, { ok: true, job: await hub.jobCancel(id) });
+						} catch (error) {
+							return sendJson(res, 404, { ok: false, error: error.message });
+						}
+					}
+					return sendJson(res, 405, { ok: false, error: "method not allowed" });
+				},
+			}),
+		"juzi: job api",
 	);
 
 	ctx.effect(
@@ -1025,6 +1142,192 @@ export function apply(ctx) {
 			isConcurrencySafe: () => true,
 			async execute(args) {
 				return await hub.sessionClose(String(args.session_id || ""));
+			},
+		}),
+	);
+
+	ctx.tools.register(
+		defineTool({
+			name: "juzi_job_start",
+			description:
+				"Juzi Session: start an async one-shot job on a Juzi outbound-agent machine. Returns immediately with a jobId; use juzi_job_status to read progress. Use this for builds/downloads/deploys instead of blocking juzi_exec.",
+			parameters: {
+				machine: { type: "string", required: true, description: "Machine id or exact name." },
+				command: { type: "string", required: true, description: "Command to run." },
+				shell: {
+					type: "string",
+					description: "cmd | powershell | pwsh on Windows; sh | bash on Unix. Omit for platform default.",
+				},
+				cwd: { type: "string", description: "Working directory." },
+				name: { type: "string", description: "Short display name for the job." },
+			},
+			output: {
+				schema: {
+					type: "object",
+					additionalProperties: false,
+					properties: {
+						jobId: { type: "string", required: true },
+						name: { type: "string", required: true },
+						startedAt: { type: "string", required: true },
+						status: { type: "string", required: true },
+					},
+				},
+				render: (_args, value) => [{ type: "text", text: `任务已启动：${value.jobId} (${value.name})` }],
+			},
+			isConcurrencySafe: () => true,
+			async execute(args) {
+				const machine = store.find(args.machine);
+				if (!machine) throw new Error(`machine not found: ${args.machine}`);
+				if (!hub.agents.has(machine.id)) throw new Error(`machine offline: ${machine.name} (${machine.id})`);
+				const command = String(args.command || "").trim();
+				if (!command) throw new Error("command 不能为空");
+				return await hub.jobStart(
+					machine.id,
+					command,
+					String(args.shell || ""),
+					String(args.cwd || ""),
+					String(args.name || ""),
+				);
+			},
+		}),
+	);
+
+	ctx.tools.register(
+		defineTool({
+			name: "juzi_job_status",
+			description:
+				"Juzi Session: read async job status, elapsed time, output byte counts and stdout/stderr tails. Use wait_ms up to 30000 to long-poll instead of sleeping.",
+			parameters: {
+				job_id: { type: "string", required: true, description: "Job id returned by juzi_job_start." },
+				wait_ms: { type: "integer", description: "Long-poll up to 30000 ms; default 0." },
+				tail_bytes: { type: "integer", description: "Tail size per stream, default 32768, max 262144." },
+			},
+			timeoutMs: 45_000,
+			output: {
+				schema: {
+					type: "object",
+					additionalProperties: false,
+					properties: {
+						jobId: { type: "string", required: true },
+						name: { type: "string", required: true },
+						command: { type: "string", required: true },
+						shell: { type: "string", required: true },
+						cwd: { type: "string", required: true },
+						status: { type: "string", required: true },
+						exitCode: { type: "integer", required: true },
+						startedAt: { type: "string", required: true },
+						durationMs: { type: "number", required: true },
+						bytesOut: { type: "number", required: true },
+						bytesErr: { type: "number", required: true },
+						stdoutTail: { type: "string", required: true },
+						stderrTail: { type: "string", required: true },
+						truncated: { type: "boolean", required: true },
+					},
+				},
+				render: (_args, value) => {
+					const head = `${value.name} ${value.status} ${value.durationMs}ms out=${value.bytesOut} err=${value.bytesErr}`;
+					const body = [value.stdoutTail, value.stderrTail].filter((s) => s.length > 0).join("\n");
+					return [{ type: "text", text: body.length > 0 ? `${head}\n${body}` : head }];
+				},
+			},
+			isConcurrencySafe: () => true,
+			async execute(args) {
+				return await hub.jobStatus(
+					String(args.job_id || ""),
+					args.wait_ms ?? 0,
+					args.tail_bytes ?? 32 * 1024,
+				);
+			},
+		}),
+	);
+
+	ctx.tools.register(
+		defineTool({
+			name: "juzi_job_cancel",
+			description: "Juzi Session: cancel an async Juzi job and kill its process tree.",
+			parameters: {
+				job_id: { type: "string", required: true, description: "Job id returned by juzi_job_start." },
+			},
+			output: {
+				schema: {
+					type: "object",
+					additionalProperties: false,
+					properties: {
+						jobId: { type: "string", required: true },
+						status: { type: "string", required: true },
+						exitCode: { type: "integer", required: true },
+						durationMs: { type: "number", required: true },
+					},
+				},
+				render: (_args, value) => [{ type: "text", text: `任务已取消：${value.jobId} (${value.status})` }],
+			},
+			isConcurrencySafe: () => false,
+			async execute(args) {
+				return await hub.jobCancel(String(args.job_id || ""));
+			},
+		}),
+	);
+
+	ctx.tools.register(
+		defineTool({
+			name: "juzi_job_list",
+			description:
+				"Juzi Session: list async jobs on one machine, or on all online Juzi machines when machine is omitted. Use to recover job ids after a reconnect.",
+			parameters: {
+				machine: { type: "string", description: "Optional machine id or exact name." },
+			},
+			output: {
+				schema: {
+					type: "object",
+					additionalProperties: false,
+					properties: {
+						jobs: {
+							type: "array",
+							required: true,
+							items: {
+								type: "object",
+								additionalProperties: false,
+								properties: {
+									jobId: { type: "string", required: true },
+									name: { type: "string", required: true },
+									command: { type: "string", required: true },
+									shell: { type: "string", required: true },
+									cwd: { type: "string", required: true },
+									status: { type: "string", required: true },
+									exitCode: { type: "integer", required: true },
+									startedAt: { type: "string", required: true },
+									durationMs: { type: "number", required: true },
+									bytesOut: { type: "number", required: true },
+									bytesErr: { type: "number", required: true },
+									stdoutTail: { type: "string", required: true },
+									stderrTail: { type: "string", required: true },
+									truncated: { type: "boolean", required: true },
+									machineId: { type: "string", required: true },
+									machineName: { type: "string", required: true },
+								},
+							},
+						},
+					},
+				},
+				render: (_args, value) => [
+					{
+						type: "text",
+						text:
+							value.jobs.length === 0
+								? "没有任务"
+								: value.jobs.map((j) => `- ${j.jobId} ${j.name} ${j.status} ${j.machineName} ${j.durationMs}ms`).join("\n"),
+					},
+				],
+			},
+			isConcurrencySafe: () => true,
+			async execute(args) {
+				let machineId = "";
+				if (args.machine) {
+					const machine = store.find(args.machine);
+					if (!machine) throw new Error(`machine not found: ${args.machine}`);
+					machineId = machine.id;
+				}
+				return { jobs: await hub.jobList(machineId) };
 			},
 		}),
 	);

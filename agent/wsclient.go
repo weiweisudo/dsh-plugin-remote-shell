@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"sync"
 	"syscall"
@@ -25,28 +26,38 @@ const (
 )
 
 type wireMessage struct {
-	Type           string `json:"type"`
-	ID             string `json:"id,omitempty"`
-	MachineID      string `json:"machine_id,omitempty"`
-	Name           string `json:"name,omitempty"`
-	OS             string `json:"os,omitempty"`
-	Arch           string `json:"arch,omitempty"`
-	Version        string `json:"version,omitempty"`
-	DeviceToken    string `json:"device_token,omitempty"`
-	ExpiresAt      string `json:"expires_at,omitempty"`
-	Time           string `json:"time,omitempty"`
-	Command        string `json:"command,omitempty"`
-	Shell          string `json:"shell,omitempty"`
-	SessionID      string `json:"session_id,omitempty"`
-	CWD            string `json:"cwd,omitempty"`
-	TimeoutSeconds int    `json:"timeout_seconds,omitempty"`
-	ExitCode       int    `json:"exit_code"`
-	Stdout         string `json:"stdout,omitempty"`
-	Stderr         string `json:"stderr,omitempty"`
-	TimedOut       bool   `json:"timed_out,omitempty"`
-	Truncated      bool   `json:"truncated,omitempty"`
-	DurationMS     int64  `json:"duration_ms,omitempty"`
-	Error          string `json:"error,omitempty"`
+	Type           string    `json:"type"`
+	ID             string    `json:"id,omitempty"`
+	MachineID      string    `json:"machine_id,omitempty"`
+	Name           string    `json:"name,omitempty"`
+	OS             string    `json:"os,omitempty"`
+	Arch           string    `json:"arch,omitempty"`
+	Version        string    `json:"version,omitempty"`
+	DeviceToken    string    `json:"device_token,omitempty"`
+	ExpiresAt      string    `json:"expires_at,omitempty"`
+	Time           string    `json:"time,omitempty"`
+	Command        string    `json:"command,omitempty"`
+	Shell          string    `json:"shell,omitempty"`
+	SessionID      string    `json:"session_id,omitempty"`
+	JobID          string    `json:"job_id,omitempty"`
+	CWD            string    `json:"cwd,omitempty"`
+	WaitMS         int       `json:"wait_ms,omitempty"`
+	TailBytes      int       `json:"tail_bytes,omitempty"`
+	Status         string    `json:"status,omitempty"`
+	StartedAt      string    `json:"started_at,omitempty"`
+	BytesOut       int64     `json:"bytes_out,omitempty"`
+	BytesErr       int64     `json:"bytes_err,omitempty"`
+	StdoutTail     string    `json:"stdout_tail,omitempty"`
+	StderrTail     string    `json:"stderr_tail,omitempty"`
+	Jobs           []wireJob `json:"jobs,omitempty"`
+	TimeoutSeconds int       `json:"timeout_seconds,omitempty"`
+	ExitCode       int       `json:"exit_code"`
+	Stdout         string    `json:"stdout,omitempty"`
+	Stderr         string    `json:"stderr,omitempty"`
+	TimedOut       bool      `json:"timed_out,omitempty"`
+	Truncated      bool      `json:"truncated,omitempty"`
+	DurationMS     int64     `json:"duration_ms,omitempty"`
+	Error          string    `json:"error,omitempty"`
 }
 
 type workerStatus struct {
@@ -54,6 +65,23 @@ type workerStatus struct {
 	MachineID string
 	ExpiresAt string
 	Error     string
+}
+
+type wireJob struct {
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	Command    string `json:"command"`
+	Shell      string `json:"shell"`
+	CWD        string `json:"cwd"`
+	Status     string `json:"status"`
+	ExitCode   int    `json:"exit_code"`
+	StartedAt  string `json:"started_at"`
+	DurationMS int64  `json:"duration_ms"`
+	BytesOut   int64  `json:"bytes_out"`
+	BytesErr   int64  `json:"bytes_err"`
+	StdoutTail string `json:"stdout_tail"`
+	StderrTail string `json:"stderr_tail"`
+	Truncated  bool   `json:"truncated"`
 }
 
 type fatalError struct{ err error }
@@ -68,6 +96,11 @@ func runOutbound(cfg *config) error {
 }
 
 func runOutboundContext(ctx context.Context, cfg *config) error {
+	if cfg.credentialsFile != "" {
+		if _, err := ensureJobManager(filepath.Join(filepath.Dir(cfg.credentialsFile), "jobs")); err != nil {
+			log.Printf("jobs: cannot initialize output directory: %v", err)
+		}
+	}
 	u, err := url.Parse(cfg.serverURL)
 	if err != nil {
 		return fmt.Errorf("invalid --server: %w", err)
@@ -255,6 +288,88 @@ func connectOutbound(ctx context.Context, cfg *config) (bool, error) {
 			}
 		case "ping":
 			_ = send(wireMessage{Type: "pong", Time: time.Now().UTC().Format(time.RFC3339)})
+		case "job_start":
+			if msg.ID == "" || msg.Command == "" {
+				_ = send(wireMessage{Type: "job_error", ID: msg.ID, Error: "missing request or command"})
+				continue
+			}
+			go func(m wireMessage) {
+				jm := jobManagerOrNil()
+				if jm == nil {
+					_ = send(wireMessage{Type: "job_error", ID: m.ID, Error: "job manager is not initialized"})
+					return
+				}
+				j, err := jm.start(m.Command, m.Shell, m.CWD, m.Name)
+				if err != nil {
+					_ = send(wireMessage{Type: "job_error", ID: m.ID, Error: err.Error()})
+					return
+				}
+				_ = send(wireMessage{Type: "job_started", ID: m.ID, JobID: j.id, Status: "running", StartedAt: j.startedAt.UTC().Format(time.RFC3339)})
+			}(msg)
+		case "job_status":
+			if msg.ID == "" || msg.JobID == "" {
+				_ = send(wireMessage{Type: "job_error", ID: msg.ID, JobID: msg.JobID, Error: "missing request or job id"})
+				continue
+			}
+			go func(m wireMessage) {
+				jm := jobManagerOrNil()
+				j := (*job)(nil)
+				if jm != nil {
+					j = jm.get(m.JobID)
+				}
+				if j == nil {
+					_ = send(wireMessage{Type: "job_error", ID: m.ID, JobID: m.JobID, Error: "job not found"})
+					return
+				}
+				wait := time.Duration(m.WaitMS) * time.Millisecond
+				if wait < 0 || wait > 30*time.Second {
+					wait = 0
+				}
+				snap := j.snapshot(wait, m.TailBytes)
+				_ = send(wireMessage{
+					Type: "job_status_result", ID: m.ID, JobID: snap.ID, Name: snap.Name, Command: snap.Command,
+					Shell: snap.Shell, CWD: snap.CWD, Status: snap.Status, ExitCode: snap.ExitCode, StartedAt: snap.StartedAt,
+					DurationMS: snap.DurationMS, BytesOut: snap.BytesOut, BytesErr: snap.BytesErr,
+					StdoutTail: snap.StdoutTail, StderrTail: snap.StderrTail, Truncated: snap.Truncated,
+				})
+			}(msg)
+		case "job_cancel":
+			if msg.ID == "" || msg.JobID == "" {
+				_ = send(wireMessage{Type: "job_error", ID: msg.ID, JobID: msg.JobID, Error: "missing request or job id"})
+				continue
+			}
+			go func(m wireMessage) {
+				jm := jobManagerOrNil()
+				if jm == nil {
+					_ = send(wireMessage{Type: "job_error", ID: m.ID, JobID: m.JobID, Error: "job manager is not initialized"})
+					return
+				}
+				j, err := jm.cancel(m.JobID)
+				if err != nil {
+					_ = send(wireMessage{Type: "job_error", ID: m.ID, JobID: m.JobID, Error: err.Error()})
+					return
+				}
+				snap := j.snapshot(time.Second, 4096)
+				_ = send(wireMessage{
+					Type: "job_canceled", ID: m.ID, JobID: snap.ID, Status: snap.Status, ExitCode: snap.ExitCode,
+					DurationMS: snap.DurationMS, BytesOut: snap.BytesOut, BytesErr: snap.BytesErr,
+					StdoutTail: snap.StdoutTail, StderrTail: snap.StderrTail, Truncated: snap.Truncated,
+				})
+			}(msg)
+		case "job_list":
+			go func(m wireMessage) {
+				jm := jobManagerOrNil()
+				if jm == nil {
+					_ = send(wireMessage{Type: "job_error", ID: m.ID, Error: "job manager is not initialized"})
+					return
+				}
+				list := jm.list()
+				wire := make([]wireJob, 0, len(list))
+				for _, j := range list {
+					wire = append(wire, wireJob{ID: j.ID, Name: j.Name, Command: j.Command, Shell: j.Shell, CWD: j.CWD, Status: j.Status, ExitCode: j.ExitCode, StartedAt: j.StartedAt, DurationMS: j.DurationMS, BytesOut: j.BytesOut, BytesErr: j.BytesErr, StdoutTail: j.StdoutTail, StderrTail: j.StderrTail, Truncated: j.Truncated})
+				}
+				_ = send(wireMessage{Type: "job_list_result", ID: m.ID, Jobs: wire})
+			}(msg)
 		case "session_open":
 			if msg.ID == "" || msg.SessionID == "" {
 				_ = send(wireMessage{Type: "session_error", ID: msg.ID, SessionID: msg.SessionID, Error: "missing request or session id"})

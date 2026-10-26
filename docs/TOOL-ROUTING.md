@@ -35,6 +35,10 @@ juzi_exec
 juzi_session_open
 juzi_session_exec
 juzi_session_close
+juzi_job_start
+juzi_job_status
+juzi_job_cancel
+juzi_job_list
 ```
 
 - **只**管理通过一次性配对链接注册的 outbound agent

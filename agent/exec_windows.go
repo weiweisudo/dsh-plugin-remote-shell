@@ -70,7 +70,11 @@ func startCommand(command string, env []string) (*runningCommand, error) {
 	return startCommandShell(command, "cmd", env)
 }
 
-func startCommandShell(command, shell string, env []string) (_ *runningCommand, err error) {
+func startCommandShell(command, shell string, env []string) (*runningCommand, error) {
+	return startCommandShellDir(command, shell, "", env)
+}
+
+func startCommandShellDir(command, shell, dir string, env []string) (_ *runningCommand, err error) {
 	pipes, err := newCommandPipes()
 	if err != nil {
 		return nil, err
@@ -184,13 +188,20 @@ func startCommandShell(command, shell string, env []string) (_ *runningCommand, 
 	if err != nil {
 		return nil, err
 	}
+	var cwdPtr *uint16
+	if strings.TrimSpace(dir) != "" {
+		cwdPtr, err = syscall.UTF16PtrFromString(dir)
+		if err != nil {
+			return nil, err
+		}
+	}
 	startup := startupInfoEx{AttributeList: attributeList}
 	startup.Cb = uint32(unsafe.Sizeof(startup))
 	startup.Flags = syscall.STARTF_USESTDHANDLES
 	startup.StdInput, startup.StdOutput, startup.StdErr = inherited[0], inherited[1], inherited[2]
 	var process syscall.ProcessInformation
 	if err := syscall.CreateProcess(app, line, nil, nil, true,
-		syscall.CREATE_UNICODE_ENVIRONMENT|extendedStartupInfoPresent|createNoWindow, &environment[0], nil,
+		syscall.CREATE_UNICODE_ENVIRONMENT|extendedStartupInfoPresent|createNoWindow, &environment[0], cwdPtr,
 		&startup.StartupInfo, &process); err != nil {
 		return nil, fmt.Errorf("start command in job: %w", err)
 	}

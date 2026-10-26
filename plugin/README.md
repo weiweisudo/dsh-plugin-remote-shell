@@ -15,6 +15,7 @@ DSH bundle（host + client）：配对、机器台账、WS 端点和工具注册
 - `DELETE /api/remote-shell/machines/:id` 撤销
 - 工具：`juzi_hosts`、`juzi_exec`（一次性）
 - 工具：`juzi_session_open` / `juzi_session_exec` / `juzi_session_close`（持久 shell）
+- 工具：`juzi_job_start` / `juzi_job_status` / `juzi_job_cancel` / `juzi_job_list`（异步长任务）
 - 与 `dsh-server-deck` 的 `server_deck_*`、`dsh-remote` 的 `rw_*` **不是同一套台账**：本插件只管理主动出站的 agent 机器
 - 配对 secret / 设备 token 只存 SHA-256；设备凭证 180 天
 

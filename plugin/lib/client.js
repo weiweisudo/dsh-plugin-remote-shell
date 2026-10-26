@@ -196,6 +196,7 @@ window.__ModuleLoader__.load({
 			const S = useMemo(() => styles(p), [dark]);
 			const [machines, setMachines] = useState([]);
 			const [pairings, setPairings] = useState([]);
+			const [jobs, setJobs] = useState([]);
 			const [presets, setPresets] = useState([]);
 			const [currentId, setCurrentId] = useState("");
 			const [agentPort, setAgentPort] = useState(47777);
@@ -208,13 +209,15 @@ window.__ModuleLoader__.load({
 			const [now, setNow] = useState(Date.now());
 
 			const load = useCallback(async () => {
-				const [m, q, c] = await Promise.all([
+				const [m, q, c, j] = await Promise.all([
 					request("/machines"),
 					request("/pairings"),
 					request("/config"),
+					request("/jobs"),
 				]);
 				if (m?.ok && Array.isArray(m.machines)) setMachines(m.machines);
 				if (q?.ok && Array.isArray(q.pairings)) setPairings(q.pairings);
+				if (j?.ok && Array.isArray(j.jobs)) setJobs(j.jobs);
 				if (c?.ok) {
 					if (Array.isArray(c.presets)) setPresets(c.presets);
 					if (typeof c.currentId === "string") setCurrentId(c.currentId);
@@ -298,6 +301,15 @@ window.__ModuleLoader__.load({
 					setCreated((prev) => (prev?.pairing?.id === id ? null : prev));
 					load();
 				} else setMessage(res?.error || "取消失败");
+			}
+
+			async function cancelJob(id) {
+				setBusy(`job:${id}`);
+				setMessage("");
+				const res = await request(`/jobs/${encodeURIComponent(id)}/cancel`, { method: "POST" });
+				setBusy("");
+				if (res?.ok) load();
+				else setMessage(res?.error || "取消失败");
 			}
 
 			async function removeMachine(id) {
@@ -524,6 +536,50 @@ window.__ModuleLoader__.load({
 											),
 										),
 									),
+								),
+							),
+				),
+
+				h(
+					"div",
+					{ style: S.card },
+					h(
+						"div",
+						{ style: S.head },
+						h("div", { style: S.title }, "任务"),
+						h("div", { style: S.sub }, `${jobs.filter((j) => ["running", "canceling"].includes(j.status)).length} 运行中 / ${jobs.length} 个`),
+					),
+					jobs.length === 0
+						? h("div", { style: S.note }, "还没有异步任务。长命令用 juzi_job_start 启动，这里会显示进度。")
+						: jobs.map((job) =>
+								h(
+									"div",
+									{ key: job.jobId, style: { ...S.preset, alignItems: "flex-start" } },
+									h(
+										"div",
+										{ style: { flex: "1 1 auto", minWidth: 0 } },
+										h(
+											"div",
+											{ style: S.row },
+											h("span", { style: S.presetName }, job.name || job.jobId),
+											h("span", { style: S.badge }, job.status),
+											h("span", { style: S.note }, `${job.machineName || job.machineId} · ${Math.round(job.durationMs / 1000)}s · out ${(job.bytesOut / 1024).toFixed(1)}KB`),
+										),
+										job.stdoutTail
+											? h("code", { style: { ...S.code, marginTop: 6, maxHeight: 120, overflow: "auto" } }, String(job.stdoutTail).slice(-800))
+											: null,
+									),
+									["running", "canceling"].includes(job.status)
+										? h(
+												"button",
+												{
+													style: { ...S.button, ...S.danger, flex: "0 0 auto" },
+													disabled: busy !== "",
+													onClick: () => cancelJob(job.jobId),
+												},
+												"取消",
+											)
+										: null,
 								),
 							),
 				),

@@ -115,6 +115,10 @@ docs/     计划、验收、Windows 说明
 - Windows 上当前 agent 若以普通权限启动，UAC 过滤后是 Medium；需要管理员请安装为服务（LocalSystem）或以管理员身份启动
 - UAC 不能静默绕过；无人值守优先用服务模式
 
+## 异步任务
+
+长任务用 `juzi_job_*`，不阻塞 DSH 工具调用；Web 设置页有独立「任务」卡片。详见 [异步任务](docs/async-jobs.md)。
+
 ## Windows 验证
 
 见 [Windows 实机验证清单](docs/windows-validation.md)。

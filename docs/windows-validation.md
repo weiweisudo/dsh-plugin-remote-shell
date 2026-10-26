@@ -63,7 +63,22 @@ juzi_session_close(session_id)
 - [ ] 超时行为符合文档（销毁会话）
 - [ ] close 后进程退出
 
-## 7. 待办
+## 7. 异步 job
+
+```text
+juzi_job_start(machine, shell="powershell", command="Start-Sleep 10; 'done'")
+juzi_job_status(job_id, wait_ms=30000)
+juzi_job_cancel(job_id)
+```
+
+- [ ] start 1 秒内返回 job_id
+- [ ] status 能看到 running/耗时/字节数
+- [ ] 完成后 exited + 输出尾部
+- [ ] cancel 杀进程树
+- [ ] Web「任务」卡片显示并取消
+- [ ] agent 断线重连后 job_list 能看到任务
+
+## 8. 待办
 
 - [ ] 异步 job：长任务不占同步调用
 - [ ] DPAPI 保存凭证

@@ -120,7 +120,27 @@ if (!second.stdout.includes("/tmp") || !second.stdout.includes("value=42")) {
   throw new Error(`session state not preserved: ${JSON.stringify(second)}`);
 }
 await tools.juzi_session_close.execute({ session_id: session.sessionId }, {});
-console.log("paired + exec ok (cmd default + bash shell + persistent session)");
+
+const job = await tools.juzi_job_start.execute(
+  { machine: machine.id, shell: "bash", command: "echo job-start; sleep 1; echo job-done", name: "e2e job" },
+  {},
+);
+if (!job?.jobId) throw new Error(`job start failed: ${JSON.stringify(job)}`);
+const jobStatus = await tools.juzi_job_status.execute({ job_id: job.jobId, wait_ms: 5000 }, {});
+if (jobStatus.status !== "exited" || !jobStatus.stdoutTail.includes("job-done")) {
+  throw new Error(`job status failed: ${JSON.stringify(jobStatus)}`);
+}
+const cancelJob = await tools.juzi_job_start.execute(
+  { machine: machine.id, shell: "bash", command: "sleep 30", name: "cancel me" },
+  {},
+);
+const canceled = await tools.juzi_job_cancel.execute({ job_id: cancelJob.jobId }, {});
+if (!["canceled", "canceling"].includes(canceled.status)) throw new Error(`job cancel failed: ${JSON.stringify(canceled)}`);
+const jobList = await tools.juzi_job_list.execute({ machine: machine.id }, {});
+if (!Array.isArray(jobList.jobs) || jobList.jobs.length < 2) throw new Error(`job list failed: ${JSON.stringify(jobList)}`);
+const jobsHttp = await api("GET", "/jobs");
+if (!jobsHttp?.ok || !Array.isArray(jobsHttp.jobs) || jobsHttp.jobs.length < 2) throw new Error(`jobs HTTP failed: ${JSON.stringify(jobsHttp)}`);
+console.log("paired + exec ok (cmd default + bash shell + persistent session + async jobs)");
 
 agent.kill("SIGTERM");
 await new Promise((r) => setTimeout(r, 500));
