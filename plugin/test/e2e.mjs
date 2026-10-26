@@ -36,7 +36,7 @@ const port = server.address().port;
 
 const prefix = `ws://127.0.0.1:${agentPort}/api/remote-shell/agent`;
 const cfgRes = await new Promise((resolve, reject) => {
-  const raw = JSON.stringify({ publicUrl: prefix });
+  const raw = JSON.stringify({ name: "e2e 入口", publicUrl: prefix });
   const req = http.request(
     { host: "127.0.0.1", port, path: "/api/remote-shell/config", method: "PUT", headers: { "content-type": "application/json", "content-length": Buffer.byteLength(raw) } },
     (res) => {
@@ -48,7 +48,7 @@ const cfgRes = await new Promise((resolve, reject) => {
   req.on("error", reject);
   req.end(raw);
 });
-if (!cfgRes?.ok || cfgRes.publicUrl !== prefix) throw new Error(`config prefix failed: ${JSON.stringify(cfgRes)}`);
+if (!cfgRes?.ok || cfgRes.publicUrl !== prefix || cfgRes.name !== "e2e 入口") throw new Error(`config prefix failed: ${JSON.stringify(cfgRes)}`);
 
 const body = JSON.stringify({ label: "e2e" });
 const pairing = await new Promise((resolve, reject) => {

@@ -158,6 +158,7 @@ window.__ModuleLoader__.load({
 			const S = useMemo(() => styles(p), [dark]);
 			const [machines, setMachines] = useState([]);
 			const [pairings, setPairings] = useState([]);
+			const [profileName, setProfileName] = useState("");
 			const [publicUrl, setPublicUrl] = useState("");
 			const [prefixMsg, setPrefixMsg] = useState("");
 			const [label, setLabel] = useState("");
@@ -167,10 +168,23 @@ window.__ModuleLoader__.load({
 			const [now, setNow] = useState(Date.now());
 
 			const load = useCallback(async () => {
-				const [m, q, c] = await Promise.all([request("/machines"), request("/pairings"), request("/config")]);
+				const [m, q] = await Promise.all([request("/machines"), request("/pairings")]);
 				if (m?.ok && Array.isArray(m.machines)) setMachines(m.machines);
 				if (q?.ok && Array.isArray(q.pairings)) setPairings(q.pairings);
-				if (c?.ok && typeof c.publicUrl === "string") setPublicUrl(c.publicUrl);
+			}, []);
+
+			// Load the editable config once. Polling it would overwrite whatever
+			// the user is typing every few seconds.
+			useEffect(() => {
+				let alive = true;
+				request("/config").then((c) => {
+					if (!alive || !c?.ok) return;
+					if (typeof c.name === "string") setProfileName(c.name);
+					if (typeof c.publicUrl === "string") setPublicUrl(c.publicUrl);
+				});
+				return () => {
+					alive = false;
+				};
 			}, []);
 
 			useEffect(() => {
@@ -188,11 +202,12 @@ window.__ModuleLoader__.load({
 				const res = await request("/config", {
 					method: "PUT",
 					headers: { "content-type": "application/json" },
-					body: JSON.stringify({ publicUrl: publicUrl.trim() }),
+					body: JSON.stringify({ name: profileName.trim(), publicUrl: publicUrl.trim() }),
 				});
 				if (res?.ok) {
+					setProfileName(res.name || "");
 					setPublicUrl(res.publicUrl || "");
-					setPrefixMsg(res.publicUrl ? "前缀已保存" : "已恢复自动前缀");
+					setPrefixMsg(res.publicUrl ? "入口已保存" : "已恢复自动入口");
 					setTimeout(() => setPrefixMsg(""), 2500);
 				} else setPrefixMsg(res?.error || "保存失败");
 			}
@@ -331,28 +346,36 @@ window.__ModuleLoader__.load({
 				h(
 					"div",
 					{ style: S.card },
-					h("div", { style: S.head }, h("div", { style: S.title }, "链接前缀")),
+					h("div", { style: S.head }, h("div", { style: S.title }, "链接入口")),
 					h(
 						"div",
 						{ style: S.note },
-						"生成配对链接时使用。留空则自动使用当前访问地址 + 47777；建议配置为 Lucky / Cloudflare 的公网入口。",
+						"生成配对链接时使用。名称用于标识入口，前缀是 Lucky / Cloudflare 的完整 WebSocket 地址；留空前缀则自动使用当前访问地址 + 47777。",
 					),
 					h(
 						"div",
 						{ style: { ...S.row, marginTop: 10 } },
+						h("input", {
+							style: { ...S.input, minWidth: 150, flex: "0 1 180px" },
+							placeholder: "名称，例如 IPv6 直连",
+							value: profileName,
+							onChange: (e) => setProfileName(e.target.value),
+						}),
 						h("input", {
 							style: { ...S.input, minWidth: 420, flex: 1 },
 							placeholder: "wss://agent6.potatooo.top:777/api/remote-shell/agent",
 							value: publicUrl,
 							onChange: (e) => setPublicUrl(e.target.value),
 						}),
-						h("button", { style: S.button, onClick: savePrefix }, "保存前缀"),
+						h("button", { style: S.button, onClick: savePrefix }, "保存"),
 						prefixMsg ? h("span", { style: S.badge }, prefixMsg) : null,
 					),
 					h(
 						"div",
 						{ style: { ...S.note, marginTop: 6 } },
-						publicUrl ? `当前：${publicUrl}` : "当前：自动（访问地址 + 47777）",
+						publicUrl
+							? `当前：${profileName ? profileName + " — " : ""}${publicUrl}`
+							: "当前：自动（访问地址 + 47777）",
 					),
 				),
 

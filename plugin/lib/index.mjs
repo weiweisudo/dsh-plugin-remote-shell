@@ -62,7 +62,14 @@ function randomToken() {
 
 function loadConfig() {
 	const raw = readJSON(CONFIG_FILE, {});
-	return { publicUrl: typeof raw.publicUrl === "string" ? raw.publicUrl : "" };
+	return {
+		name: typeof raw.name === "string" ? raw.name : "",
+		publicUrl: typeof raw.publicUrl === "string" ? raw.publicUrl : "",
+	};
+}
+
+function normalizeName(raw) {
+	return String(raw || "").trim().slice(0, 80);
 }
 
 function normalizePrefix(raw) {
@@ -548,15 +555,16 @@ export function apply(ctx) {
 				handler: async (req, res) => {
 					if (req.method === "GET") {
 						const cfg = loadConfig();
-						return sendJson(res, 200, { ok: true, publicUrl: cfg.publicUrl, effective: pairingBase(req) });
+						return sendJson(res, 200, { ok: true, name: cfg.name, publicUrl: cfg.publicUrl, effective: pairingBase(req) });
 					}
 					if (req.method === "PUT" || req.method === "POST") {
 						const body = await readBody(req);
 						if (body === null) return sendJson(res, 400, { ok: false, error: "invalid JSON" });
 						try {
+							const name = normalizeName(body.name);
 							const publicUrl = normalizePrefix(body.publicUrl);
-							writeJSON(CONFIG_FILE, { publicUrl });
-							return sendJson(res, 200, { ok: true, publicUrl, effective: pairingBase(req) });
+							writeJSON(CONFIG_FILE, { name, publicUrl });
+							return sendJson(res, 200, { ok: true, name, publicUrl, effective: pairingBase(req) });
 						} catch (error) {
 							return sendJson(res, 400, { ok: false, error: error.message });
 						}
