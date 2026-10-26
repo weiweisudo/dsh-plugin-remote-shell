@@ -20,6 +20,9 @@ remote-agent.exe --service       SCM 内部入口，无 UI
 
 ## 本地设置页
 
+- 可修改“设备名称”（保存到 `%LOCALAPPDATA%\dsh-remote-shell\settings.json`，保存后自动重连）
+
+
 - 只绑 `127.0.0.1`
 - 端口从 `49777` 到 `49796` 顺序尝试；全部占用时绑定临时端口
 - token 放 URL fragment，不发给服务器；页面 JS 读取后放 `X-RS-Token`

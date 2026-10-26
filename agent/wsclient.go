@@ -97,6 +97,7 @@ func runOutbound(cfg *config) error {
 }
 
 func runOutboundContext(ctx context.Context, cfg *config) error {
+	applySavedName(cfg)
 	if cfg.credentialsFile != "" {
 		if _, err := ensureJobManager(filepath.Join(filepath.Dir(cfg.credentialsFile), "jobs")); err != nil {
 			log.Printf("jobs: cannot initialize output directory: %v", err)

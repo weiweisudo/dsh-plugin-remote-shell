@@ -7,7 +7,7 @@ const desktopHTML = `<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>DSH Remote Shell</title>
+<title>桔子会话</title>
 <style>
   :root {
     color-scheme: light dark;
@@ -73,6 +73,16 @@ const desktopHTML = `<!doctype html>
     color: var(--text);
     font: 12px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace;
   }
+  .textinput {
+    flex: 1;
+    min-width: 180px;
+    padding: 7px 9px;
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    background: var(--input);
+    color: var(--text);
+    font: inherit;
+  }
   button {
     border: 1px solid var(--border);
     background: var(--input);
@@ -95,7 +105,7 @@ const desktopHTML = `<!doctype html>
 </head>
 <body>
 <main>
-  <h1>DSH Remote Shell</h1>
+  <h1>桔子会话</h1>
   <p class="sub">本机 agent 主动出站连接 DSH；不需要 sshd、WinRM，也不监听入站端口。</p>
 
   <section>
@@ -107,13 +117,23 @@ const desktopHTML = `<!doctype html>
 
   <section>
     <h2>远程连接链接</h2>
-    <div class="meta" style="margin-bottom:8px">在 DSH 插件「远程机器」里生成一次性链接，粘贴到这里。链接 5 分钟有效，只用一次。</div>
+    <div class="meta" style="margin-bottom:8px">在 DSH「桔子会话」里生成一次性链接，粘贴到这里。链接 5 分钟有效，只用一次。</div>
     <textarea id="link" placeholder="ws://192.168.5.8:47777/api/remote-shell/agent#..."></textarea>
     <div class="row" style="margin-top:8px">
       <button class="primary" id="pair">连接</button>
       <button id="reconnect">重新连接</button>
     </div>
     <div class="msg" id="pairMsg"></div>
+  </section>
+
+  <section>
+    <h2>设备名称</h2>
+    <div class="meta" style="margin-bottom:8px">显示在 DSH「桔子会话」的机器列表里；保存后会自动重连。</div>
+    <div class="row">
+      <input class="textinput" id="deviceName" maxlength="80" placeholder="例如：书房 Windows PC">
+      <button class="primary" id="saveName">保存</button>
+    </div>
+    <div class="msg" id="nameMsg"></div>
   </section>
 
   <section>
@@ -148,6 +168,9 @@ const desktopHTML = `<!doctype html>
     history.replaceState(null, "", location.pathname);
   }
   const $ = (id) => document.getElementById(id);
+  const nameInput = $("deviceName");
+  let nameDirty = false;
+  nameInput.addEventListener("input", () => { nameDirty = true; });
   function msg(el, text, cls) {
     el.textContent = text || "";
     el.className = "msg" + (cls ? " " + cls : "");
@@ -187,6 +210,9 @@ const desktopHTML = `<!doctype html>
       $("uninstall").disabled = !s.service_installed;
       $("autostart").checked = !!s.autostart;
       $("autostart").disabled = !!s.service_running;
+      if (!nameDirty) nameInput.value = s.name || "";
+      nameInput.disabled = !!s.service_installed;
+      $("saveName").disabled = !!s.service_installed;
     } catch (e) {
       $("state").textContent = "无法读取设置接口";
       $("err").textContent = e.message;
@@ -210,6 +236,19 @@ const desktopHTML = `<!doctype html>
   $("reconnect").onclick = async () => {
     try { await api("/api/reconnect", { method: "POST" }); msg($("pairMsg"), "已请求重连", "ok"); load(); }
     catch (e) { msg($("pairMsg"), e.message, "bad"); }
+  };
+  $("saveName").onclick = async () => {
+    const name = nameInput.value.trim();
+    if (!name) { msg($("nameMsg"), "名称不能为空", "bad"); return; }
+    try {
+      const data = await api("/api/device-name", { method: "POST", body: JSON.stringify({ name }) });
+      nameDirty = false;
+      nameInput.value = data.name || name;
+      msg($("nameMsg"), "已保存，正在用新名称重连", "ok");
+      setTimeout(load, 800);
+    } catch (e) {
+      msg($("nameMsg"), e.message, "bad");
+    }
   };
   $("autostart").onchange = async (event) => {
     try {

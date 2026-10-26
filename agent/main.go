@@ -36,7 +36,7 @@ import (
 	"time"
 )
 
-const version = "0.1.0-p0.5.11"
+const version = "0.1.0-p0.5.12"
 
 const (
 	// loopback is hard-wired: the agent must never listen on a routable
@@ -71,6 +71,7 @@ type config struct {
 	name            string
 	pairSecret      string
 	credentialsFile string
+	nameExplicit    bool
 	onStatus        func(workerStatus)
 }
 
@@ -108,6 +109,7 @@ func main() {
 	if *timeout <= 0 || *timeout > int(maxTimeout/time.Second) {
 		log.Fatalf("startup: --timeout must be between 1 and 3600 seconds")
 	}
+	nameExplicit := strings.TrimSpace(*name) != "" || strings.TrimSpace(os.Getenv("RELAY_MACHINE_NAME")) != ""
 	if *name == "" {
 		*name, _ = os.Hostname()
 	}
@@ -119,6 +121,7 @@ func main() {
 		machineID:       strings.TrimSpace(*machineID),
 		name:            strings.TrimSpace(*name),
 		credentialsFile: *credentials,
+		nameExplicit:    nameExplicit,
 	}
 
 	if strings.TrimSpace(*pair) != "" {

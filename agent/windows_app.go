@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -71,6 +72,7 @@ func runDesktop(cfg *config) error {
 	if cfg == nil {
 		cfg = defaultDesktopConfig()
 	}
+	applySavedName(cfg)
 	app := &desktopApp{cfg: *cfg}
 	if err := app.startUI(); err != nil {
 		return err
@@ -104,6 +106,7 @@ func (a *desktopApp) startUI() error {
 	mux.HandleFunc("/api/service/install", a.auth(a.handleInstallService))
 	mux.HandleFunc("/api/service/uninstall", a.auth(a.handleUninstallService))
 	mux.HandleFunc("/api/autostart", a.auth(a.handleAutoStart))
+	mux.HandleFunc("/api/device-name", a.auth(a.handleDeviceName))
 	mux.HandleFunc("/api/quit", a.auth(a.handleQuit))
 	a.server = &http.Server{Handler: mux}
 	go func() {
@@ -382,6 +385,40 @@ func (a *desktopApp) handleInstallService(w http.ResponseWriter, _ *http.Request
 	a.mu.Unlock()
 	a.refreshTray()
 	writeJSONReply(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (a *desktopApp) handleDeviceName(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSONReply(w, http.StatusMethodNotAllowed, map[string]any{"ok": false})
+		return
+	}
+	if installed, running, _ := queryServiceState(); installed && running {
+		writeJSONReply(w, http.StatusBadRequest, map[string]any{
+			"ok": false, "error": "服务正在运行；请先停止服务，或在 ProgramData 的服务配置中修改名称",
+		})
+		return
+	}
+	var body struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSONReply(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "invalid JSON"})
+		return
+	}
+	name := strings.TrimSpace(body.Name)
+	if name == "" {
+		writeJSONReply(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "名称不能为空"})
+		return
+	}
+	if err := saveSavedName(a.cfg.credentialsFile, name); err != nil {
+		writeJSONReply(w, http.StatusBadRequest, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	a.mu.Lock()
+	a.cfg.name = name
+	a.mu.Unlock()
+	a.startWorker()
+	writeJSONReply(w, http.StatusOK, map[string]any{"ok": true, "name": name})
 }
 
 func (a *desktopApp) handleAutoStart(w http.ResponseWriter, r *http.Request) {
