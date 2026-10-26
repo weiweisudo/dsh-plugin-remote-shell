@@ -4,6 +4,12 @@ DSH 的远程机器管理插件。
 
 目标：被控端（Windows / Linux）**主动出站**连接 DSH，由 DSH 生成一次性配对链接、自动登记机器并下发命令；后续增加交互终端（PTY）和文件传输。
 
+## 下载
+
+- [最新 Release](https://github.com/weiweisudo/dsh-plugin-remote-shell/releases/latest)
+- Windows：`remote-agent-windows-amd64.exe`
+- Linux：`remote-agent-linux-amd64`
+
 ## 为什么
 
 - 目标机经常没有 sshd / WinRM，或不允许开系统服务
