@@ -1,0 +1,27 @@
+{
+  "name": "dsh-plugin-remote-shell",
+  "version": "0.1.0-p0",
+  "private": true,
+  "description": "DSH 远程机器插件（P0）：被控端主动出站连接，提供 remote_hosts / remote_exec",
+  "main": "lib/index.mjs",
+  "exports": {
+    ".": "./lib/index.mjs",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.2"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": ["@deepseek-ai/dsh-client-ui-settings"]
+    }
+  }
+}

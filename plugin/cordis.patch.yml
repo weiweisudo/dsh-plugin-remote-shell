@@ -1,0 +1,4 @@
+- insert:
+    - id: remote-shell
+      # 必须与 package.json 的 name 一致
+      name: "dsh-plugin-remote-shell"
