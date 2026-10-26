@@ -109,6 +109,7 @@ docs/     计划、验收、Windows 说明
 
 ## 连续执行与权限
 
+- Windows `cmd` 输出按 OEM 代码页兜底解码；中文命令字面量和文件编码仍建议用 PowerShell
 - `juzi_exec` 是**一次性命令**：每次新 shell，`cd` / 变量不跨命令，没有交互 stdin
 - 需要连续状态时用 `juzi_session_*`：持久 shell，每条命令仍返回 exit code / stdout / stderr / cwd
 - 真正的交互终端（xterm / ConPTY）仍未实现，agent 不需要读终端屏幕

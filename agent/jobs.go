@@ -155,8 +155,10 @@ func (j *job) snapshot(wait time.Duration, tailBytes int) jobSnapshot {
 	if tailBytes <= 0 || tailBytes > 256<<10 {
 		tailBytes = defaultTailBytes
 	}
-	outTail, outTruncated, _ := readTail(j.stdoutPath, tailBytes)
-	errTail, errTruncated, _ := readTail(j.stderrPath, tailBytes)
+	outRaw, outTruncated, _ := readTailBytes(j.stdoutPath, tailBytes)
+	errRaw, errTruncated, _ := readTailBytes(j.stderrPath, tailBytes)
+	outTail := decodeShellOutput(j.shell, outRaw)
+	errTail := decodeShellOutput(j.shell, errRaw)
 	duration := time.Since(j.startedAt).Milliseconds()
 	if !endedAt.IsZero() {
 		duration = endedAt.Sub(j.startedAt).Milliseconds()
@@ -181,15 +183,15 @@ func (j *job) snapshot(wait time.Duration, tailBytes int) jobSnapshot {
 	}
 }
 
-func readTail(path string, limit int) (string, bool, error) {
+func readTailBytes(path string, limit int) ([]byte, bool, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return "", false, err
+		return nil, false, err
 	}
 	defer f.Close()
 	st, err := f.Stat()
 	if err != nil {
-		return "", false, err
+		return nil, false, err
 	}
 	size := st.Size()
 	start := int64(0)
@@ -200,9 +202,9 @@ func readTail(path string, limit int) (string, bool, error) {
 	}
 	buf := make([]byte, size-start)
 	if _, err := f.ReadAt(buf, start); err != nil && err != io.EOF {
-		return "", truncated, err
+		return nil, truncated, err
 	}
-	return string(buf), truncated, nil
+	return buf, truncated, nil
 }
 
 type jobManager struct {

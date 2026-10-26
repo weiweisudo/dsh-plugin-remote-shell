@@ -88,7 +88,7 @@ PowerShell 命令会自动加：
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 ```
 
-所以中文和 `Microsoft Windows 10 专业版` 能正常按 UTF-8 返回。`cmd` 的 `chcp 65001` 仍可能因程序自身代码页乱码，中文任务建议用 PowerShell。
+所以中文和 `Microsoft Windows 10 专业版` 能正常按 UTF-8 返回。`cmd` 的 `chcp 65001` 仍可能因程序自身代码页乱码。cmd 输出是 OEM 代码页字节流，不是 UTF-8；agent 现在会在输出不是合法 UTF-8 时按 OEM 代码页兜底解码。但这不改变文件字节：`echo 中文 > f.txt` 写入的仍然是 GBK，中文任务仍建议用 PowerShell。
 
 ## 隐藏窗口
 

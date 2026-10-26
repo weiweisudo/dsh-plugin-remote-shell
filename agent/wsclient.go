@@ -457,8 +457,8 @@ func connectOutbound(ctx context.Context, cfg *config) (bool, error) {
 					Type:       "exec_result",
 					ID:         m.ID,
 					ExitCode:   exitCode,
-					Stdout:     stdout.String(),
-					Stderr:     stderr.String(),
+					Stdout:     decodeShellOutput(m.Shell, stdout.buf),
+					Stderr:     decodeShellOutput(m.Shell, stderr.buf),
 					Truncated:  stdout.truncated || stderr.truncated,
 					DurationMS: time.Since(start).Milliseconds(),
 				}
