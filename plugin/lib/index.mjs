@@ -428,7 +428,7 @@ class MachineHub {
 		});
 	}
 
-	async exec(machineId, command, timeoutMs = 60_000) {
+	async exec(machineId, command, timeoutMs = 60_000, shell = "") {
 		const entry = this.agents.get(machineId);
 		if (!entry || entry.ws.readyState !== 1) throw new Error(`machine ${machineId} is offline`);
 		const id = randomUUID();
@@ -443,6 +443,7 @@ class MachineHub {
 				type: "exec",
 				id,
 				command,
+				shell: shell || "",
 				timeout_seconds: Math.ceil(timeout / 1000),
 			});
 			if (!ok) {
@@ -711,7 +712,8 @@ export function apply(ctx) {
 	ctx.tools.register(
 		defineTool({
 			name: "remote_hosts",
-			description: "List machines authorized for the remote-shell plugin and their online status.",
+			description:
+				"List machines registered with THIS remote-shell agent plugin (outbound agent, not the Server Deck SSH ledger). For SSH hosts use server_deck_hosts instead.",
 			parameters: {},
 			output: {
 				schema: {
@@ -765,10 +767,15 @@ export function apply(ctx) {
 	ctx.tools.register(
 		defineTool({
 			name: "remote_exec",
-			description: "Run one non-interactive command on an authorized remote machine and return stdout/stderr/exit code.",
+			description:
+				"Run one non-interactive command on a machine registered with THIS remote-shell agent plugin (outbound agent, not Server Deck SSH). Use server_deck_exec for Server Deck hosts. Each call starts a new shell; no persistent cwd/env.",
 			parameters: {
 				machine: { type: "string", required: true, description: "Machine id or exact name." },
 				command: { type: "string", required: true, description: "Command to run." },
+				shell: {
+					type: "string",
+					description: "cmd | powershell | pwsh on Windows; sh | bash on Unix. Omit for the platform default.",
+				},
 				timeout_ms: { type: "integer", description: "Timeout in ms (1000-3600000), default 60000." },
 			},
 			timeoutMs: 3_700_000,
@@ -803,7 +810,11 @@ export function apply(ctx) {
 				if (!hub.agents.has(machine.id)) throw new Error(`machine offline: ${machine.name} (${machine.id})`);
 				const command = String(args.command || "").trim();
 				if (!command) throw new Error("command 不能为空");
-				const result = await hub.exec(machine.id, command, args.timeout_ms ?? 60_000);
+				const shell = String(args.shell || "").trim().toLowerCase();
+				if (shell && !["cmd", "powershell", "pwsh", "sh", "bash"].includes(shell)) {
+					throw new Error(`unsupported shell: ${shell}`);
+				}
+				const result = await hub.exec(machine.id, command, args.timeout_ms ?? 60_000, shell);
 				return {
 					machineId: machine.id,
 					name: machine.name,

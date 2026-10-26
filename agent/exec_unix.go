@@ -6,15 +6,35 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"strings"
 	"syscall"
 )
 
 func startCommand(command string, env []string) (*runningCommand, error) {
+	return startCommandShell(command, "sh", env)
+}
+
+func startCommandShell(command, shell string, env []string) (*runningCommand, error) {
+	shell = strings.ToLower(strings.TrimSpace(shell))
+	if shell == "" {
+		shell = "sh"
+	}
 	pipes, err := newCommandPipes()
 	if err != nil {
 		return nil, err
 	}
-	cmd := exec.Command("sh", "-c", command)
+	var cmd *exec.Cmd
+	switch shell {
+	case "sh":
+		cmd = exec.Command("sh", "-c", command)
+	case "bash":
+		cmd = exec.Command("bash", "-lc", command)
+	case "powershell", "pwsh":
+		cmd = exec.Command("pwsh", "-NoProfile", "-NonInteractive", "-Command", command)
+	default:
+		pipes.close()
+		return nil, errors.New("unsupported shell " + shell)
+	}
 	cmd.Env = env
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = pipes.in, pipes.outW, pipes.errW

@@ -64,7 +64,11 @@ type startupInfoEx struct {
 // The job-list creation attribute (Windows 10+) associates the shell atomically,
 // before it can spawn children. The job handle is never inherited, so an abrupt
 // agent exit also kills the job. The raw cmd line avoids Go's argv escaping.
-func startCommand(command string, env []string) (_ *runningCommand, err error) {
+func startCommand(command string, env []string) (*runningCommand, error) {
+	return startCommandShell(command, "cmd", env)
+}
+
+func startCommandShell(command, shell string, env []string) (_ *runningCommand, err error) {
 	pipes, err := newCommandPipes()
 	if err != nil {
 		return nil, err
@@ -143,11 +147,26 @@ func startCommand(command string, env []string) (_ *runningCommand, err error) {
 	if n == 0 || n >= uintptr(len(directory)) {
 		return nil, fmt.Errorf("resolve system command interpreter: %w", callErr)
 	}
-	app, err := syscall.UTF16PtrFromString(syscall.UTF16ToString(directory[:n]) + `\cmd.exe`)
+	systemDir := syscall.UTF16ToString(directory[:n])
+	var appPath, commandLine string
+	switch strings.ToLower(strings.TrimSpace(shell)) {
+	case "", "cmd":
+		appPath = systemDir + `\cmd.exe`
+		commandLine = "cmd.exe /d /c " + command
+	case "powershell":
+		appPath = systemDir + `\WindowsPowerShell\v1.0\powershell.exe`
+		commandLine = "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command " + command
+	case "pwsh":
+		appPath = "pwsh.exe"
+		commandLine = "pwsh.exe -NoProfile -NonInteractive -Command " + command
+	default:
+		return nil, fmt.Errorf("unsupported shell %q (use cmd, powershell or pwsh)", shell)
+	}
+	app, err := syscall.UTF16PtrFromString(appPath)
 	if err != nil {
 		return nil, err
 	}
-	line, err := syscall.UTF16PtrFromString("cmd.exe /d /c " + command)
+	line, err := syscall.UTF16PtrFromString(commandLine)
 	if err != nil {
 		return nil, errors.New("command contains a NUL character")
 	}

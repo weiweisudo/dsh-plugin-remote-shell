@@ -99,7 +99,12 @@ const machine = await waitOnline();
 if (!readFileSync(creds, "utf8").includes(machine.id)) throw new Error("credentials missing machine id");
 const result = await tools.remote_exec.execute({ machine: machine.id, command: "uname -a", timeout_ms: 10000 }, {});
 if (result.exitCode !== 0 || !result.stdout.includes("Linux")) throw new Error(`exec failed: ${JSON.stringify(result)}`);
-console.log("paired + exec ok");
+const bashResult = await tools.remote_exec.execute(
+  { machine: machine.id, shell: "bash", command: "echo $BASH_VERSION", timeout_ms: 10000 },
+  {},
+);
+if (bashResult.exitCode !== 0 || !bashResult.stdout.trim()) throw new Error(`bash shell failed: ${JSON.stringify(bashResult)}`);
+console.log("paired + exec ok (cmd default + bash shell)");
 
 agent.kill("SIGTERM");
 await new Promise((r) => setTimeout(r, 500));

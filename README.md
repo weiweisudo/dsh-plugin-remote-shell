@@ -102,6 +102,13 @@ plugin/   DSH 插件 bundle
 docs/     计划、验收、Windows 说明
 ```
 
+## 连续执行与权限
+
+- 当前 `remote_exec` 是**一次性命令**：每次新 shell，`cd` / 变量不跨命令，没有交互 stdin
+- 连续窗口需要 P2 的 PTY（Windows ConPTY / Linux pty），不是 `shell` 参数能解决的
+- Windows 上当前 agent 若以普通权限启动，UAC 过滤后是 Medium；需要管理员请安装为服务（LocalSystem）或以管理员身份启动
+- UAC 不能静默绕过；无人值守优先用服务模式
+
 ## 安全
 
 - agent 仅以运行它的用户权限执行命令，**不提供提权**

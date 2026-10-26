@@ -68,6 +68,38 @@ remote-agent.exe service stop
 | 托盘单机 | 高，登录后自启，关闭设置页不影响 | 个人 PC |
 | 前台运行 | 低 | 调试 |
 
+## 连续执行
+
+当前 `remote_exec` 每次启动新进程，不保留 cwd/env/变量，也没有 stdin。真正的连续窗口需要 P2：
+
+- Windows `CreatePseudoConsole`（ConPTY）
+- Linux `creack/pty`
+- 协议增加 `pty_open` / `pty_data` / `pty_resize` / `pty_close`
+- DSH 侧 xterm 终端，`keepMounted: true`
+
+`shell: powershell` 只是换解释器，不会让命令之间共享状态。
+
+## 管理员权限
+
+当前实测：
+
+```text
+PC-...\Administrator
+IsInRole(Administrator) = False
+Mandatory Label\Medium
+```
+
+用户名是 Administrator，但 UAC 过滤后是 Medium，不是 elevated。
+
+可行方式：
+
+1. **Windows 服务**：`service install`，LocalSystem，无 UAC，适合无人值守；不能操作桌面 GUI
+2. **以管理员身份启动**：右键“以管理员身份运行”或 `Start-Process -Verb RunAs`，启动时一次 UAC
+3. **计划任务**：创建时勾选“使用最高权限运行”，登录后自动以 elevated 启动；需管理员创建一次
+4. **每条命令 UAC**：会弹桌面确认，输出捕获困难，服务模式通常弹不出来，不推荐
+
+Windows 不允许静默提权，没有“自动申请管理员且无人确认”的可靠方案。
+
 ## 已知限制
 
 - 交叉编译已通过，尚未在 Windows 实机验收托盘/服务

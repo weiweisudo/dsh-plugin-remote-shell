@@ -23,10 +23,14 @@ type runningCommand struct {
 }
 
 func runCommand(ctx context.Context, command string, stdout, stderr io.Writer) (int, error) {
+	return runCommandShell(ctx, command, "", stdout, stderr)
+}
+
+func runCommandShell(ctx context.Context, command, shell string, stdout, stderr io.Writer) (int, error) {
 	if err := ctx.Err(); err != nil {
 		return -1, err
 	}
-	p, err := startCommand(command, commandEnvironment(os.Environ()))
+	p, err := startCommandShell(command, shell, commandEnvironment(os.Environ()))
 	if err != nil {
 		return -1, err
 	}

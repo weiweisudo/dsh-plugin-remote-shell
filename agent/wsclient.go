@@ -36,6 +36,7 @@ type wireMessage struct {
 	ExpiresAt      string `json:"expires_at,omitempty"`
 	Time           string `json:"time,omitempty"`
 	Command        string `json:"command,omitempty"`
+	Shell          string `json:"shell,omitempty"`
 	TimeoutSeconds int    `json:"timeout_seconds,omitempty"`
 	ExitCode       int    `json:"exit_code"`
 	Stdout         string `json:"stdout,omitempty"`
@@ -273,7 +274,7 @@ func connectOutbound(ctx context.Context, cfg *config) (bool, error) {
 				stdout := &capBuffer{limit: maxStreamBytes}
 				stderr := &capBuffer{limit: maxStreamBytes}
 				start := time.Now()
-				exitCode, runErr := runCommand(runCtx, m.Command, stdout, stderr)
+				exitCode, runErr := runCommandShell(runCtx, m.Command, m.Shell, stdout, stderr)
 				resp := wireMessage{
 					Type:       "exec_result",
 					ID:         m.ID,
