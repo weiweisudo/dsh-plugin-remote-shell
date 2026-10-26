@@ -16,6 +16,7 @@ const AGENT_PORT = Math.max(1, Math.min(65535, Number(process.env.REMOTE_SHELL_A
 const MACHINES_FILE = join(STATE_DIR, "machines.json");
 const SECRETS_FILE = join(STATE_DIR, "secrets.json");
 const PAIRINGS_FILE = join(STATE_DIR, "pairings.json");
+const CONFIG_FILE = join(STATE_DIR, "config.json");
 
 const PAIRING_TTL_MS = 5 * 60 * 1000;
 const DEVICE_TTL_MS = 180 * 24 * 60 * 60 * 1000;
@@ -57,6 +58,23 @@ function safeEqualHex(a, b) {
 
 function randomToken() {
 	return randomBytes(32).toString("base64url");
+}
+
+function loadConfig() {
+	const raw = readJSON(CONFIG_FILE, {});
+	return { publicUrl: typeof raw.publicUrl === "string" ? raw.publicUrl : "" };
+}
+
+function normalizePrefix(raw) {
+	const text = String(raw || "").trim();
+	if (text === "") return "";
+	const u = new URL(text);
+	if (u.protocol !== "ws:" && u.protocol !== "wss:") {
+		throw new Error("前缀必须是 ws:// 或 wss:// 地址");
+	}
+	u.hash = "";
+	if (!u.pathname || u.pathname === "/") u.pathname = AGENT_PATH;
+	return u.toString().replace(/\/$/, "");
 }
 
 class MachineStore {
@@ -454,9 +472,15 @@ function requestHost(req) {
 	return hostHeader.replace(/:[0-9]+$/, "").replace(/^\[|\]$/g, "");
 }
 
-function pairingLink(req, secret) {
+function pairingBase(req) {
+	const configured = loadConfig().publicUrl.trim();
+	if (configured) return configured;
 	const proto = process.env.REMOTE_SHELL_AGENT_TLS === "1" ? "wss" : "ws";
-	return `${proto}://${requestHost(req)}:${AGENT_PORT}${AGENT_PATH}#${secret}`;
+	return `${proto}://${requestHost(req)}:${AGENT_PORT}${AGENT_PATH}`;
+}
+
+function pairingLink(req, secret) {
+	return `${pairingBase(req)}#${secret}`;
 }
 
 function agentCommand(link) {
@@ -514,6 +538,33 @@ export function apply(ctx) {
 			};
 		},
 		"remote-shell: agent listener",
+	);
+
+	ctx.effect(
+		() =>
+			ctx.webServer.register({
+				kind: "prefix",
+				path: `${BASE}/config`,
+				handler: async (req, res) => {
+					if (req.method === "GET") {
+						const cfg = loadConfig();
+						return sendJson(res, 200, { ok: true, publicUrl: cfg.publicUrl, effective: pairingBase(req) });
+					}
+					if (req.method === "PUT" || req.method === "POST") {
+						const body = await readBody(req);
+						if (body === null) return sendJson(res, 400, { ok: false, error: "invalid JSON" });
+						try {
+							const publicUrl = normalizePrefix(body.publicUrl);
+							writeJSON(CONFIG_FILE, { publicUrl });
+							return sendJson(res, 200, { ok: true, publicUrl, effective: pairingBase(req) });
+						} catch (error) {
+							return sendJson(res, 400, { ok: false, error: error.message });
+						}
+					}
+					return sendJson(res, 405, { ok: false, error: "method not allowed" });
+				},
+			}),
+		"remote-shell: link prefix config",
 	);
 
 	ctx.effect(

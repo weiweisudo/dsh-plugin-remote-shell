@@ -34,6 +34,22 @@ const server = http.createServer(async (req, res) => {
 await new Promise((r) => server.listen(0, "127.0.0.1", r));
 const port = server.address().port;
 
+const prefix = `ws://127.0.0.1:${agentPort}/api/remote-shell/agent`;
+const cfgRes = await new Promise((resolve, reject) => {
+  const raw = JSON.stringify({ publicUrl: prefix });
+  const req = http.request(
+    { host: "127.0.0.1", port, path: "/api/remote-shell/config", method: "PUT", headers: { "content-type": "application/json", "content-length": Buffer.byteLength(raw) } },
+    (res) => {
+      let data = "";
+      res.on("data", (c) => (data += c));
+      res.on("end", () => resolve(JSON.parse(data)));
+    },
+  );
+  req.on("error", reject);
+  req.end(raw);
+});
+if (!cfgRes?.ok || cfgRes.publicUrl !== prefix) throw new Error(`config prefix failed: ${JSON.stringify(cfgRes)}`);
+
 const body = JSON.stringify({ label: "e2e" });
 const pairing = await new Promise((resolve, reject) => {
   const req = http.request(
@@ -48,7 +64,7 @@ const pairing = await new Promise((resolve, reject) => {
   req.end(body);
 });
 if (!pairing?.ok) throw new Error(`create pairing failed: ${JSON.stringify(pairing)}`);
-if (!pairing.link.includes(`:${agentPort}/api/remote-shell/agent#`)) throw new Error(`bad link: ${pairing.link}`);
+if (!pairing.link.startsWith(prefix + "#")) throw new Error(`configured prefix not used: ${pairing.link}`);
 console.log("pairing link ok");
 
 const hosts = async () => (await tools.remote_hosts.execute({}, {})).machines;

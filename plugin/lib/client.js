@@ -158,6 +158,8 @@ window.__ModuleLoader__.load({
 			const S = useMemo(() => styles(p), [dark]);
 			const [machines, setMachines] = useState([]);
 			const [pairings, setPairings] = useState([]);
+			const [publicUrl, setPublicUrl] = useState("");
+			const [prefixMsg, setPrefixMsg] = useState("");
 			const [label, setLabel] = useState("");
 			const [created, setCreated] = useState(null);
 			const [busy, setBusy] = useState("");
@@ -165,9 +167,10 @@ window.__ModuleLoader__.load({
 			const [now, setNow] = useState(Date.now());
 
 			const load = useCallback(async () => {
-				const [m, q] = await Promise.all([request("/machines"), request("/pairings")]);
+				const [m, q, c] = await Promise.all([request("/machines"), request("/pairings"), request("/config")]);
 				if (m?.ok && Array.isArray(m.machines)) setMachines(m.machines);
 				if (q?.ok && Array.isArray(q.pairings)) setPairings(q.pairings);
+				if (c?.ok && typeof c.publicUrl === "string") setPublicUrl(c.publicUrl);
 			}, []);
 
 			useEffect(() => {
@@ -179,6 +182,20 @@ window.__ModuleLoader__.load({
 					clearInterval(tick);
 				};
 			}, [load]);
+
+			async function savePrefix() {
+				setPrefixMsg("");
+				const res = await request("/config", {
+					method: "PUT",
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify({ publicUrl: publicUrl.trim() }),
+				});
+				if (res?.ok) {
+					setPublicUrl(res.publicUrl || "");
+					setPrefixMsg(res.publicUrl ? "前缀已保存" : "已恢复自动前缀");
+					setTimeout(() => setPrefixMsg(""), 2500);
+				} else setPrefixMsg(res?.error || "保存失败");
+			}
 
 			async function createPairing() {
 				setBusy("create");
@@ -309,6 +326,34 @@ window.__ModuleLoader__.load({
 								),
 							)
 						: null,
+				),
+
+				h(
+					"div",
+					{ style: S.card },
+					h("div", { style: S.head }, h("div", { style: S.title }, "链接前缀")),
+					h(
+						"div",
+						{ style: S.note },
+						"生成配对链接时使用。留空则自动使用当前访问地址 + 47777；建议配置为 Lucky / Cloudflare 的公网入口。",
+					),
+					h(
+						"div",
+						{ style: { ...S.row, marginTop: 10 } },
+						h("input", {
+							style: { ...S.input, minWidth: 420, flex: 1 },
+							placeholder: "wss://agent6.potatooo.top:777/api/remote-shell/agent",
+							value: publicUrl,
+							onChange: (e) => setPublicUrl(e.target.value),
+						}),
+						h("button", { style: S.button, onClick: savePrefix }, "保存前缀"),
+						prefixMsg ? h("span", { style: S.badge }, prefixMsg) : null,
+					),
+					h(
+						"div",
+						{ style: { ...S.note, marginTop: 6 } },
+						publicUrl ? `当前：${publicUrl}` : "当前：自动（访问地址 + 47777）",
+					),
 				),
 
 				h(

@@ -37,12 +37,14 @@ DSH 插件「远程机器」监听 0.0.0.0:47777
 
 ## 配对流程
 
-1. 在 DSH 插件页点「生成连接链接」
-2. 得到一次性链接（5 分钟有效，secret 在 `#` fragment 中）：
+1. 在 DSH 插件页配置「链接前缀」（可留空自动使用 LAN 地址）
+2. 点「生成连接链接」，得到一次性链接（5 分钟有效，secret 在 `#` fragment 中）：
 
 ```
-ws://192.168.5.8:47777/api/remote-shell/agent#<SECRET>
+wss://agent6.potatooo.top:777/api/remote-shell/agent#<SECRET>
 ```
+
+前缀建议指向 Lucky / Cloudflare 的公网入口；插件实际监听仍是内部的 `47777`。
 
 3. 在目标机运行：
 
