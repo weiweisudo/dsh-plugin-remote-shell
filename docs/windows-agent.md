@@ -78,6 +78,22 @@ remote-agent.exe service stop
 | 托盘单机 | 高，登录后自启，关闭设置页不影响 | 个人 PC |
 | 前台运行 | 低 | 调试 |
 
+## PowerShell 引号与中文
+
+一次性 `juzi_exec(shell="powershell")` 使用 PowerShell 的 `-EncodedCommand`（UTF-16LE/base64），不再经过 Windows 命令行引号解析，因此 `$x = "abc"` 不会被吞引号。
+
+PowerShell 命令会自动加：
+
+```powershell
+[Console]::OutputEncoding = [Text.Encoding]::UTF8
+```
+
+所以中文和 `Microsoft Windows 10 专业版` 能正常按 UTF-8 返回。`cmd` 的 `chcp 65001` 仍可能因程序自身代码页乱码，中文任务建议用 PowerShell。
+
+## 隐藏窗口
+
+agent 启动的 `cmd` / `powershell` 子进程使用 `CREATE_NO_WINDOW` / `HideWindow`，不会弹控制台窗口。这个参数不建议开放为“可见”，因为远程 agent 没有交互桌面，弹出窗口只会干扰用户。
+
 ## 连续执行
 
 - `remote_exec`：一次性进程，不保留 cwd/env/变量
@@ -86,6 +102,16 @@ remote-agent.exe service stop
 - 真正的交互终端（xterm / ConPTY）还没做；agent 不需要读终端屏幕
 
 持久会话不是 PTY：stdout/stderr 分开，输出适合 agent。
+
+### 会话超时
+
+当前 `juzi_session_exec` 超时会**销毁整个会话**，这是为了不留下无法回收的 shell。大型任务不要把 `timeout_ms` 设得刚好卡边界：
+
+- 短任务：默认 60s
+- 长任务：明确设置更大的 `timeout_ms`（最大 3600000）
+- 真正超过 DSH 工具调用上限的任务：应该用异步 job，而不是一直加 timeout
+
+异步 job（`juzi_job_start/status/cancel`）是下一步，不把长任务塞进同步 session。
 
 ## 管理员权限
 

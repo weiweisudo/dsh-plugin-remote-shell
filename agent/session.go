@@ -117,6 +117,7 @@ func startShellSession(id, shell, cwd string) (*shellSession, error) {
 		return nil, err
 	}
 	cmd := exec.Command(path, args...)
+	configureShellProcess(cmd)
 	if strings.TrimSpace(cwd) != "" {
 		cmd.Dir = cwd
 	}
@@ -320,7 +321,8 @@ func sessionCommand(shell string) (path string, args []string, powerShell bool, 
 
 func sessionScript(shell, command, token string) string {
 	if strings.EqualFold(shell, "powershell") || strings.EqualFold(shell, "pwsh") {
-		return fmt.Sprintf(`%s
+		return fmt.Sprintf(`[Console]::OutputEncoding = [Text.Encoding]::UTF8
+%s
 $global:LASTEXITCODE = $null
 $__dsh_ok = $?
 $__dsh_ec = if ($LASTEXITCODE -ne $null) { $LASTEXITCODE } elseif ($__dsh_ok) { 0 } else { 1 }

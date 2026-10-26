@@ -3,6 +3,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"os"
@@ -20,6 +21,7 @@ const (
 	procThreadAttributeHandleList     = 0x20002
 	procThreadAttributeJobList        = 0x2000d
 	extendedStartupInfoPresent        = 0x80000
+	createNoWindow                    = 0x08000000
 )
 
 var (
@@ -154,11 +156,19 @@ func startCommandShell(command, shell string, env []string) (_ *runningCommand, 
 		appPath = systemDir + `\cmd.exe`
 		commandLine = "cmd.exe /d /c " + command
 	case "powershell":
+		encoded, err := encodePowerShell(command)
+		if err != nil {
+			return nil, err
+		}
 		appPath = systemDir + `\WindowsPowerShell\v1.0\powershell.exe`
-		commandLine = "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command " + command
+		commandLine = "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand " + encoded
 	case "pwsh":
+		encoded, err := encodePowerShell(command)
+		if err != nil {
+			return nil, err
+		}
 		appPath = "pwsh.exe"
-		commandLine = "pwsh.exe -NoProfile -NonInteractive -Command " + command
+		commandLine = "pwsh.exe -NoProfile -NonInteractive -EncodedCommand " + encoded
 	default:
 		return nil, fmt.Errorf("unsupported shell %q (use cmd, powershell or pwsh)", shell)
 	}
@@ -180,7 +190,7 @@ func startCommandShell(command, shell string, env []string) (_ *runningCommand, 
 	startup.StdInput, startup.StdOutput, startup.StdErr = inherited[0], inherited[1], inherited[2]
 	var process syscall.ProcessInformation
 	if err := syscall.CreateProcess(app, line, nil, nil, true,
-		syscall.CREATE_UNICODE_ENVIRONMENT|extendedStartupInfoPresent, &environment[0], nil,
+		syscall.CREATE_UNICODE_ENVIRONMENT|extendedStartupInfoPresent|createNoWindow, &environment[0], nil,
 		&startup.StartupInfo, &process); err != nil {
 		return nil, fmt.Errorf("start command in job: %w", err)
 	}
@@ -236,4 +246,20 @@ func windowsEnvironmentKey(item string) string {
 		return strings.ToUpper(item[:start+end])
 	}
 	return strings.ToUpper(item)
+}
+func encodePowerShell(command string) (string, error) {
+	// EncodedCommand is UTF-16LE/base64, so quotes and newlines are preserved
+	// by Windows command-line parsing. Also force UTF-8 console output.
+	script := "[Console]::OutputEncoding = [Text.Encoding]::UTF8; " + command
+	units := utf16.Encode([]rune(script))
+	buf := make([]byte, len(units)*2)
+	for i, unit := range units {
+		buf[i*2] = byte(unit)
+		buf[i*2+1] = byte(unit >> 8)
+	}
+	encoded := base64.StdEncoding.EncodeToString(buf)
+	if len(encoded) > 30000 {
+		return "", errors.New("PowerShell command too large for EncodedCommand")
+	}
+	return encoded, nil
 }
