@@ -50,9 +50,44 @@ PASS
 
 结果：通过。
 
+
+## 真实 DSH 验收（2026-10-26 12:47）
+
+环境：DSH Web `0.2.1-rc.2`，插件通过 profile link 加载。
+
+结果：
+
+```text
+[remote-shell] loaded: 1 machines, 0 online
+[remote-shell] agent listener on 0.0.0.0:47777/api/remote-shell/agent
+[remote-shell] agent online: m_p0test0001 P0 Test Linux
+```
+
+`remote_hosts`：
+
+```text
+- P0 Test Linux `m_p0test0001` online linux/amd64
+```
+
+`remote_exec`（machine = P0 Test Linux）：
+
+```text
+exit 0
+Linux debian13 6.12.113+deb13-amd64 ... GNU/Linux
+---
+root
+/root/Work/Daliy
+```
+
+停止 agent 后状态转为 `offline`。
+
+### 结论
+
+DSH 插件、专用端口 47777、token 鉴权、机器台账、命令执行均已在真实 DSH 中跑通。P0 的 Linux 验收完成。
+
 ## 尚未验证
 
-- 真实 DSH 插件端口 `47777` 的 LAN 直连（下一步）
+- Windows agent 实机运行（只有交叉编译）
 - 远程访问所需的端口映射 / Tailscale（P0 不做）
 - Windows agent 实机运行（只有交叉编译）
 - 命令超时/输出截断/并发上限（逻辑存在，未做破坏性测试）
