@@ -40,6 +40,7 @@ type desktopApp struct {
 	token    string
 	uiURL    string
 
+	ready      bool
 	mStatus    *systray.MenuItem
 	mOpen      *systray.MenuItem
 	mReconnect *systray.MenuItem
@@ -202,8 +203,12 @@ func (a *desktopApp) pair(link string) error {
 
 func (a *desktopApp) refreshTray() {
 	a.mu.Lock()
+	ready := a.ready
 	status := a.status
 	a.mu.Unlock()
+	if !ready {
+		return
+	}
 	text := "离线"
 	if status.Online {
 		text = "在线"
@@ -232,6 +237,9 @@ func (a *desktopApp) onReady() {
 	a.mUninstall = systray.AddMenuItem("解除 Windows 服务", "需要管理员权限")
 	systray.AddSeparator()
 	a.mQuit = systray.AddMenuItem("退出", "退出托盘和后台连接")
+	a.mu.Lock()
+	a.ready = true
+	a.mu.Unlock()
 	go func() {
 		for {
 			select {
