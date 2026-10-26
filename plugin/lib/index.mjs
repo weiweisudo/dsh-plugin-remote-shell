@@ -62,19 +62,36 @@ function randomToken() {
 
 function loadConfig() {
 	const raw = readJSON(CONFIG_FILE, {});
-	return {
-		name: typeof raw.name === "string" ? raw.name : "",
-		publicUrl: typeof raw.publicUrl === "string" ? raw.publicUrl : "",
-	};
+	let presets = Array.isArray(raw.presets)
+		? raw.presets
+				.filter((p) => p && typeof p.id === "string" && typeof p.url === "string")
+				.map((p) => ({ id: p.id, label: String(p.label || "未命名"), url: p.url }))
+		: [];
+	// Migrate the earlier single name/publicUrl shape on first read.
+	if (presets.length === 0 && typeof raw.publicUrl === "string" && raw.publicUrl.trim()) {
+		presets = [{ id: "legacy", label: raw.name || "默认入口", url: raw.publicUrl }];
+		return { presets, currentId: "legacy" };
+	}
+	const currentId =
+		typeof raw.currentId === "string" && presets.some((p) => p.id === raw.currentId)
+			? raw.currentId
+			: presets[0]?.id || "";
+	return { presets, currentId };
 }
 
-function normalizeName(raw) {
-	return String(raw || "").trim().slice(0, 80);
+function saveConfig(cfg) {
+	writeJSON(CONFIG_FILE, { presets: cfg.presets, currentId: cfg.currentId });
+}
+
+function normalizeLabel(raw) {
+	const text = String(raw || "").trim().slice(0, 80);
+	if (!text) throw new Error("名称不能为空");
+	return text;
 }
 
 function normalizePrefix(raw) {
 	const text = String(raw || "").trim();
-	if (text === "") return "";
+	if (text === "") throw new Error("前缀不能为空");
 	const u = new URL(text);
 	if (u.protocol !== "ws:" && u.protocol !== "wss:") {
 		throw new Error("前缀必须是 ws:// 或 wss:// 地址");
@@ -82,6 +99,10 @@ function normalizePrefix(raw) {
 	u.hash = "";
 	if (!u.pathname || u.pathname === "/") u.pathname = AGENT_PATH;
 	return u.toString().replace(/\/$/, "");
+}
+
+function currentPreset(cfg = loadConfig()) {
+	return cfg.presets.find((p) => p.id === cfg.currentId) || null;
 }
 
 class MachineStore {
@@ -480,8 +501,8 @@ function requestHost(req) {
 }
 
 function pairingBase(req) {
-	const configured = loadConfig().publicUrl.trim();
-	if (configured) return configured;
+	const preset = currentPreset();
+	if (preset?.url) return preset.url;
 	const proto = process.env.REMOTE_SHELL_AGENT_TLS === "1" ? "wss" : "ws";
 	return `${proto}://${requestHost(req)}:${AGENT_PORT}${AGENT_PATH}`;
 }
@@ -553,26 +574,78 @@ export function apply(ctx) {
 				kind: "prefix",
 				path: `${BASE}/config`,
 				handler: async (req, res) => {
-					if (req.method === "GET") {
-						const cfg = loadConfig();
-						return sendJson(res, 200, { ok: true, name: cfg.name, publicUrl: cfg.publicUrl, effective: pairingBase(req) });
-					}
-					if (req.method === "PUT" || req.method === "POST") {
+					if (req.method !== "GET") return sendJson(res, 405, { ok: false, error: "method not allowed" });
+					const cfg = loadConfig();
+					return sendJson(res, 200, {
+						ok: true,
+						presets: cfg.presets,
+						currentId: cfg.currentId,
+						currentUrl: currentPreset(cfg)?.url || "",
+						agentPort: AGENT_PORT,
+						effective: pairingBase(req),
+					});
+				},
+			}),
+		"remote-shell: link presets read",
+	);
+
+	ctx.effect(
+		() =>
+			ctx.webServer.register({
+				kind: "prefix",
+				path: `${BASE}/presets`,
+				handler: async (req, res) => {
+					const url = new URL(req.url || "/", "http://local");
+					const rest = url.pathname.slice(`${BASE}/presets`.length).replace(/^\/+/, "");
+					if (req.method === "POST" && rest === "") {
 						const body = await readBody(req);
 						if (body === null) return sendJson(res, 400, { ok: false, error: "invalid JSON" });
 						try {
-							const name = normalizeName(body.name);
-							const publicUrl = normalizePrefix(body.publicUrl);
-							writeJSON(CONFIG_FILE, { name, publicUrl });
-							return sendJson(res, 200, { ok: true, name, publicUrl, effective: pairingBase(req) });
+							const label = normalizeLabel(body.label);
+							const linkUrl = normalizePrefix(body.url);
+							const cfg = loadConfig();
+							const preset = { id: `l_${randomBytes(4).toString("hex")}`, label, url: linkUrl };
+							cfg.presets.push(preset);
+							if (!cfg.currentId) cfg.currentId = preset.id;
+							saveConfig(cfg);
+							return sendJson(res, 200, { ok: true, preset, currentId: cfg.currentId });
 						} catch (error) {
 							return sendJson(res, 400, { ok: false, error: error.message });
 						}
 					}
+					if (req.method === "DELETE" && rest) {
+						const cfg = loadConfig();
+						const before = cfg.presets.length;
+						cfg.presets = cfg.presets.filter((p) => p.id !== rest);
+						if (cfg.presets.length === before) return sendJson(res, 404, { ok: false, error: "地址不存在" });
+						if (cfg.currentId === rest) cfg.currentId = cfg.presets[0]?.id || "";
+						saveConfig(cfg);
+						return sendJson(res, 200, { ok: true, currentId: cfg.currentId });
+					}
 					return sendJson(res, 405, { ok: false, error: "method not allowed" });
 				},
 			}),
-		"remote-shell: link prefix config",
+		"remote-shell: link presets write",
+	);
+
+	ctx.effect(
+		() =>
+			ctx.webServer.register({
+				kind: "exact",
+				path: `${BASE}/switch`,
+				handler: async (req, res) => {
+					if (req.method !== "POST") return sendJson(res, 405, { ok: false, error: "method not allowed" });
+					const body = await readBody(req);
+					if (body === null) return sendJson(res, 400, { ok: false, error: "invalid JSON" });
+					const cfg = loadConfig();
+					const preset = cfg.presets.find((p) => p.id === body.id);
+					if (!preset) return sendJson(res, 404, { ok: false, error: "地址不存在" });
+					cfg.currentId = preset.id;
+					saveConfig(cfg);
+					return sendJson(res, 200, { ok: true, currentId: cfg.currentId, switched: preset });
+				},
+			}),
+		"remote-shell: switch link preset",
 	);
 
 	ctx.effect(

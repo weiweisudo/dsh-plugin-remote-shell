@@ -6,7 +6,9 @@ DSH bundle（host + client）：配对、机器台账、WS 端点和工具注册
 
 - 专用 HTTP 监听（默认 `0.0.0.0:47777`，`REMOTE_SHELL_AGENT_PORT` 可改）
 - `/api/remote-shell/agent` WebSocket
-- `GET/PUT /api/remote-shell/config` 配置 `name` + `publicUrl` 链接入口
+- `GET /api/remote-shell/config` 读取配对地址列表与当前项
+- `POST /api/remote-shell/presets` / `DELETE /api/remote-shell/presets/:id` 增删配对地址
+- `POST /api/remote-shell/switch` 切换当前配对地址
 - `POST /api/remote-shell/pairings` 生成一次性链接（5 分钟），优先使用配置的前缀
 - `GET /api/remote-shell/pairings` 等待中的配对
 - `GET /api/remote-shell/machines` 机器列表

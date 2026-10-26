@@ -50,6 +50,7 @@ window.__ModuleLoader__.load({
 			warning: "#9a6700",
 			danger: "#cf222e",
 			codeBg: "#f6f8fa",
+			presetActiveBg: "rgba(9,105,218,0.06)",
 		};
 		const DARK = {
 			border: "#30363d",
@@ -66,6 +67,7 @@ window.__ModuleLoader__.load({
 			warning: "#d29922",
 			danger: "#f85149",
 			codeBg: "#0d1117",
+			presetActiveBg: "rgba(47,129,247,0.12)",
 		};
 
 		function styles(p) {
@@ -98,6 +100,33 @@ window.__ModuleLoader__.load({
 				danger: { color: p.danger, borderColor: p.border, background: "transparent" },
 				note: { fontSize: 12, color: p.muted, lineHeight: 1.6 },
 				badge: { fontSize: 11, padding: "1px 7px", borderRadius: 999, border: `1px solid ${p.border}`, color: p.muted },
+				preset: {
+					display: "flex",
+					alignItems: "center",
+					gap: 10,
+					padding: "8px 10px",
+					borderRadius: 8,
+					border: "1px solid transparent",
+					marginTop: 6,
+				},
+				presetActive: { borderColor: p.accent, background: p.presetActiveBg },
+				presetName: { fontWeight: 600, flex: "0 0 auto" },
+				presetUrl: {
+					opacity: 0.7,
+					fontSize: 12,
+					fontFamily: "ui-monospace, Menlo, Consolas, monospace",
+					flex: "1 1 auto",
+					wordBreak: "break-all",
+				},
+				currentBadge: {
+					fontSize: 11,
+					padding: "2px 7px",
+					borderRadius: 999,
+					background: p.accent,
+					color: p.accentText,
+					flex: "0 0 auto",
+				},
+				addRow: { display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" },
 				code: {
 					display: "block",
 					background: p.codeBg,
@@ -131,6 +160,15 @@ window.__ModuleLoader__.load({
 			return `${String(Math.floor(sec / 60)).padStart(2, "0")}:${String(sec % 60).padStart(2, "0")}`;
 		}
 
+		function InfoRow({ label, value }) {
+			return h(
+				"div",
+				{ style: { display: "flex", gap: 10, padding: "3px 0", fontSize: 13 } },
+				h("span", { style: { width: 120, flex: "0 0 auto", color: "inherit", opacity: 0.65 } }, label),
+				h("span", { style: { flex: "1 1 auto", wordBreak: "break-all" } }, value),
+			);
+		}
+
 		async function copyText(text) {
 			try {
 				await navigator.clipboard.writeText(text);
@@ -158,33 +196,30 @@ window.__ModuleLoader__.load({
 			const S = useMemo(() => styles(p), [dark]);
 			const [machines, setMachines] = useState([]);
 			const [pairings, setPairings] = useState([]);
-			const [profileName, setProfileName] = useState("");
-			const [publicUrl, setPublicUrl] = useState("");
-			const [prefixMsg, setPrefixMsg] = useState("");
-			const [label, setLabel] = useState("");
+			const [presets, setPresets] = useState([]);
+			const [currentId, setCurrentId] = useState("");
+			const [agentPort, setAgentPort] = useState(47777);
+			const [draftLabel, setDraftLabel] = useState("");
+			const [draftUrl, setDraftUrl] = useState("");
+			const [addressMsg, setAddressMsg] = useState("");
 			const [created, setCreated] = useState(null);
 			const [busy, setBusy] = useState("");
 			const [message, setMessage] = useState("");
 			const [now, setNow] = useState(Date.now());
 
 			const load = useCallback(async () => {
-				const [m, q] = await Promise.all([request("/machines"), request("/pairings")]);
+				const [m, q, c] = await Promise.all([
+					request("/machines"),
+					request("/pairings"),
+					request("/config"),
+				]);
 				if (m?.ok && Array.isArray(m.machines)) setMachines(m.machines);
 				if (q?.ok && Array.isArray(q.pairings)) setPairings(q.pairings);
-			}, []);
-
-			// Load the editable config once. Polling it would overwrite whatever
-			// the user is typing every few seconds.
-			useEffect(() => {
-				let alive = true;
-				request("/config").then((c) => {
-					if (!alive || !c?.ok) return;
-					if (typeof c.name === "string") setProfileName(c.name);
-					if (typeof c.publicUrl === "string") setPublicUrl(c.publicUrl);
-				});
-				return () => {
-					alive = false;
-				};
+				if (c?.ok) {
+					if (Array.isArray(c.presets)) setPresets(c.presets);
+					if (typeof c.currentId === "string") setCurrentId(c.currentId);
+					if (Number.isFinite(Number(c.agentPort))) setAgentPort(Number(c.agentPort));
+				}
 			}, []);
 
 			useEffect(() => {
@@ -197,19 +232,47 @@ window.__ModuleLoader__.load({
 				};
 			}, [load]);
 
-			async function savePrefix() {
-				setPrefixMsg("");
-				const res = await request("/config", {
-					method: "PUT",
+			async function addPreset() {
+				setBusy("add");
+				setAddressMsg("");
+				const res = await request("/presets", {
+					method: "POST",
 					headers: { "content-type": "application/json" },
-					body: JSON.stringify({ name: profileName.trim(), publicUrl: publicUrl.trim() }),
+					body: JSON.stringify({ label: draftLabel.trim(), url: draftUrl.trim() }),
 				});
+				setBusy("");
 				if (res?.ok) {
-					setProfileName(res.name || "");
-					setPublicUrl(res.publicUrl || "");
-					setPrefixMsg(res.publicUrl ? "入口已保存" : "已恢复自动入口");
-					setTimeout(() => setPrefixMsg(""), 2500);
-				} else setPrefixMsg(res?.error || "保存失败");
+					setDraftLabel("");
+					setDraftUrl("");
+					setAddressMsg("已添加");
+					setTimeout(() => setAddressMsg(""), 2500);
+					load();
+				} else setAddressMsg(res?.error || "添加失败");
+			}
+
+			async function removePreset(id) {
+				setBusy(`remove:${id}`);
+				setAddressMsg("");
+				const res = await request(`/presets/${encodeURIComponent(id)}`, { method: "DELETE" });
+				setBusy("");
+				if (res?.ok) load();
+				else setAddressMsg(res?.error || "删除失败");
+			}
+
+			async function switchPreset(id) {
+				setBusy(`switch:${id}`);
+				setAddressMsg("");
+				const res = await request("/switch", {
+					method: "POST",
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify({ id }),
+				});
+				setBusy("");
+				if (res?.ok) {
+					setAddressMsg("已切换");
+					setTimeout(() => setAddressMsg(""), 2500);
+					load();
+				} else setAddressMsg(res?.error || "切换失败");
 			}
 
 			async function createPairing() {
@@ -218,12 +281,11 @@ window.__ModuleLoader__.load({
 				const res = await request("/pairings", {
 					method: "POST",
 					headers: { "content-type": "application/json" },
-					body: JSON.stringify({ label: label.trim() }),
+					body: JSON.stringify({}),
 				});
 				setBusy("");
 				if (res?.ok) {
 					setCreated(res);
-					setLabel("");
 					load();
 				} else setMessage(res?.error || "生成失败");
 			}
@@ -253,6 +315,7 @@ window.__ModuleLoader__.load({
 				setTimeout(() => setMessage(""), 2500);
 			}
 
+			const currentPreset = presets.find((x) => x.id === currentId) || null;
 			const pending = pairings.filter((x) => !created || x.id !== created.pairing.id);
 
 			return h(
@@ -264,30 +327,23 @@ window.__ModuleLoader__.load({
 					h(
 						"div",
 						{ style: S.head },
-						h("div", { style: S.title }, "远程机器"),
+						h("div", { style: S.title }, "运行状态"),
 						h("div", { style: S.sub }, `${machines.filter((m) => m.status === "online").length} 在线 / ${machines.length} 已授权`),
 					),
-					h(
-						"div",
-						{ style: S.note },
-						"生成一次性连接链接，在目标机运行 agent；连上后自动出现在下方，无需先创建机器。",
-					),
+					h(InfoRow, { label: "插件", value: "运行中" }),
+					h(InfoRow, { label: "监听端口", value: String(agentPort || 47777) }),
+					h(InfoRow, {
+						label: "当前配对地址",
+						value: currentPreset ? `${currentPreset.label} — ${currentPreset.url}` : "自动（访问地址 + 47777）",
+					}),
+					h(InfoRow, { label: "已授权设备", value: String(machines.length) }),
 					h(
 						"div",
 						{ style: { ...S.row, marginTop: 12 } },
-						h("input", {
-							style: S.input,
-							placeholder: "备注名（可选），例如 Windows PC",
-							value: label,
-							onChange: (e) => setLabel(e.target.value),
-							onKeyDown: (e) => {
-								if (e.key === "Enter" && !busy) createPairing();
-							},
-						}),
 						h(
 							"button",
 							{ style: { ...S.button, ...S.primary }, onClick: createPairing, disabled: busy !== "" },
-							busy === "create" ? "生成中…" : "生成连接链接",
+							busy === "create" ? "生成中…" : "生成配对链接",
 						),
 						message ? h("span", { style: S.badge }, message) : null,
 					),
@@ -314,11 +370,7 @@ window.__ModuleLoader__.load({
 									),
 								),
 								h("code", { style: S.code }, created.command),
-								h(
-									"div",
-									{ style: S.note },
-									"agent 首次连接后会保存 180 天设备凭证；之后重启不再需要链接。",
-								),
+								h("div", { style: S.note }, "agent 首次连接后会保存 180 天设备凭证；之后重启不再需要链接。"),
 							)
 						: null,
 					pending.length > 0
@@ -346,37 +398,77 @@ window.__ModuleLoader__.load({
 				h(
 					"div",
 					{ style: S.card },
-					h("div", { style: S.head }, h("div", { style: S.title }, "链接入口")),
+					h(
+						"div",
+						{ style: S.head },
+						h("div", { style: S.title }, "配对地址"),
+						h("div", { style: S.sub }, currentPreset ? `当前：${currentPreset.label}` : "当前：自动"),
+					),
 					h(
 						"div",
 						{ style: S.note },
-						"生成配对链接时使用。名称用于标识入口，前缀是 Lucky / Cloudflare 的完整 WebSocket 地址；留空前缀则自动使用当前访问地址 + 47777。",
+						"保存多个入口（名称 + 地址）。生成新链接时使用当前入口；已配对设备继续使用原地址。",
 					),
+					presets.length === 0
+						? h("div", { style: { ...S.note, marginTop: 10 } }, "还没有保存的地址，在下面添加一个。")
+						: presets.map((preset) =>
+								h(
+									"div",
+									{
+										key: preset.id,
+										style: {
+											...S.preset,
+											...(preset.id === currentId ? S.presetActive : {}),
+										},
+									},
+									h("span", { style: S.presetName }, preset.label),
+									h("span", { style: S.presetUrl }, preset.url),
+									preset.id === currentId ? h("span", { style: S.currentBadge }, "当前") : null,
+									preset.id === currentId
+										? null
+										: h(
+												"button",
+												{
+													style: S.button,
+													disabled: busy !== "",
+													onClick: () => switchPreset(preset.id),
+												},
+												"切换",
+											),
+									h(
+										"button",
+										{ style: { ...S.button, ...S.danger }, disabled: busy !== "", onClick: () => removePreset(preset.id) },
+										"删除",
+									),
+								),
+							),
 					h(
 						"div",
-						{ style: { ...S.row, marginTop: 10 } },
+						{ style: S.addRow },
 						h("input", {
-							style: { ...S.input, minWidth: 150, flex: "0 1 180px" },
-							placeholder: "名称，例如 IPv6 直连",
-							value: profileName,
-							onChange: (e) => setProfileName(e.target.value),
+							style: { ...S.input, width: 150, flex: "0 0 150px" },
+							placeholder: "名称，如 隧道 / IPv6",
+							value: draftLabel,
+							onChange: (e) => setDraftLabel(e.target.value),
 						}),
 						h("input", {
-							style: { ...S.input, minWidth: 420, flex: 1 },
-							placeholder: "wss://agent6.potatooo.top:777/api/remote-shell/agent",
-							value: publicUrl,
-							onChange: (e) => setPublicUrl(e.target.value),
+							style: { ...S.input, flex: "1 1 320px" },
+							placeholder: "wss://rmt6.potatooo.top:777/api/remote-shell/agent",
+							value: draftUrl,
+							spellCheck: false,
+							onChange: (e) => setDraftUrl(e.target.value),
 						}),
-						h("button", { style: S.button, onClick: savePrefix }, "保存"),
-						prefixMsg ? h("span", { style: S.badge }, prefixMsg) : null,
+						h(
+							"button",
+							{
+								style: { ...S.button, ...S.primary },
+								disabled: busy !== "" || draftLabel.trim() === "" || draftUrl.trim() === "",
+								onClick: addPreset,
+							},
+							busy === "add" ? "保存中…" : "添加",
+						),
 					),
-					h(
-						"div",
-						{ style: { ...S.note, marginTop: 6 } },
-						publicUrl
-							? `当前：${profileName ? profileName + " — " : ""}${publicUrl}`
-							: "当前：自动（访问地址 + 47777）",
-					),
+					addressMsg ? h("div", { style: { ...S.note, marginTop: 6 } }, addressMsg) : null,
 				),
 
 				h(
