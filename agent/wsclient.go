@@ -37,6 +37,8 @@ type wireMessage struct {
 	Time           string `json:"time,omitempty"`
 	Command        string `json:"command,omitempty"`
 	Shell          string `json:"shell,omitempty"`
+	SessionID      string `json:"session_id,omitempty"`
+	CWD            string `json:"cwd,omitempty"`
 	TimeoutSeconds int    `json:"timeout_seconds,omitempty"`
 	ExitCode       int    `json:"exit_code"`
 	Stdout         string `json:"stdout,omitempty"`
@@ -147,6 +149,8 @@ func connectOutbound(ctx context.Context, cfg *config) (bool, error) {
 	defer cancel()
 	commands := newCommandManager()
 	defer commands.stop()
+	sessions := newSessionManager()
+	defer sessions.closeAll()
 
 	// Close the socket when the process is asked to stop; a blocked ReadJSON
 	// would otherwise ignore context cancellation and keep the agent alive.
@@ -251,6 +255,63 @@ func connectOutbound(ctx context.Context, cfg *config) (bool, error) {
 			}
 		case "ping":
 			_ = send(wireMessage{Type: "pong", Time: time.Now().UTC().Format(time.RFC3339)})
+		case "session_open":
+			if msg.ID == "" || msg.SessionID == "" {
+				_ = send(wireMessage{Type: "session_error", ID: msg.ID, SessionID: msg.SessionID, Error: "missing request or session id"})
+				continue
+			}
+			go func(m wireMessage) {
+				sess, err := sessions.open(m.SessionID, m.Shell, m.CWD)
+				if err != nil {
+					_ = send(wireMessage{Type: "session_error", ID: m.ID, SessionID: m.SessionID, Error: err.Error()})
+					return
+				}
+				_ = send(wireMessage{Type: "session_opened", ID: m.ID, SessionID: m.SessionID, Shell: sess.shell, CWD: m.CWD})
+			}(msg)
+		case "session_exec":
+			if msg.ID == "" || msg.SessionID == "" || msg.Command == "" {
+				_ = send(wireMessage{Type: "session_error", ID: msg.ID, SessionID: msg.SessionID, Error: "missing request, session or command"})
+				continue
+			}
+			sess := sessions.get(msg.SessionID)
+			if sess == nil {
+				_ = send(wireMessage{Type: "session_error", ID: msg.ID, SessionID: msg.SessionID, Error: "session not found"})
+				continue
+			}
+			go func(m wireMessage, sess *shellSession) {
+				timeout := cfg.timeout
+				if m.TimeoutSeconds > 0 {
+					timeout = time.Duration(m.TimeoutSeconds) * time.Second
+				}
+				if timeout <= 0 || timeout > maxTimeout {
+					timeout = cfg.timeout
+				}
+				runCtx, cancel := context.WithTimeout(connCtx, timeout)
+				defer cancel()
+				res, err := sess.exec(runCtx, m.Command, timeout)
+				if err != nil {
+					_ = send(wireMessage{Type: "session_error", ID: m.ID, SessionID: m.SessionID, Error: err.Error(), TimedOut: res.TimedOut})
+					if res.TimedOut {
+						sessions.remove(m.SessionID)
+					}
+					return
+				}
+				_ = send(wireMessage{
+					Type:       "session_result",
+					ID:         m.ID,
+					SessionID:  m.SessionID,
+					ExitCode:   res.ExitCode,
+					Stdout:     res.Stdout,
+					Stderr:     res.Stderr,
+					Truncated:  res.Truncated,
+					TimedOut:   res.TimedOut,
+					DurationMS: res.DurationMS,
+					CWD:        res.CWD,
+				})
+			}(msg, sess)
+		case "session_close":
+			sessions.remove(msg.SessionID)
+			_ = send(wireMessage{Type: "session_closed", ID: msg.ID, SessionID: msg.SessionID})
 		case "exec":
 			if msg.ID == "" || msg.Command == "" {
 				_ = send(wireMessage{Type: "exec_result", ID: msg.ID, ExitCode: -1, Error: "missing id or command"})

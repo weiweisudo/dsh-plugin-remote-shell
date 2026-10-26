@@ -104,8 +104,9 @@ docs/     计划、验收、Windows 说明
 
 ## 连续执行与权限
 
-- 当前 `remote_exec` 是**一次性命令**：每次新 shell，`cd` / 变量不跨命令，没有交互 stdin
-- 连续窗口需要 P2 的 PTY（Windows ConPTY / Linux pty），不是 `shell` 参数能解决的
+- `remote_exec` 是**一次性命令**：每次新 shell，`cd` / 变量不跨命令，没有交互 stdin
+- 需要连续状态时用 `remote_session_*`：持久 shell，每条命令仍返回 exit code / stdout / stderr / cwd
+- 真正的交互终端（xterm / ConPTY）仍未实现，agent 不需要读终端屏幕
 - Windows 上当前 agent 若以普通权限启动，UAC 过滤后是 Medium；需要管理员请安装为服务（LocalSystem）或以管理员身份启动
 - UAC 不能静默绕过；无人值守优先用服务模式
 

@@ -104,7 +104,23 @@ const bashResult = await tools.remote_exec.execute(
   {},
 );
 if (bashResult.exitCode !== 0 || !bashResult.stdout.trim()) throw new Error(`bash shell failed: ${JSON.stringify(bashResult)}`);
-console.log("paired + exec ok (cmd default + bash shell)");
+
+const session = await tools.remote_session_open.execute({ machine: machine.id, shell: "bash" }, {});
+if (!session?.sessionId) throw new Error("session open failed");
+const first = await tools.remote_session_exec.execute(
+  { session_id: session.sessionId, command: "cd /tmp && export DSH_SESSION_VALUE=42 && echo first", timeout_ms: 10000 },
+  {},
+);
+if (first.exitCode !== 0 || !first.stdout.includes("first")) throw new Error(`session first failed: ${JSON.stringify(first)}`);
+const second = await tools.remote_session_exec.execute(
+  { session_id: session.sessionId, command: "pwd; printf 'value=%s\\n' \"$DSH_SESSION_VALUE\"", timeout_ms: 10000 },
+  {},
+);
+if (!second.stdout.includes("/tmp") || !second.stdout.includes("value=42")) {
+  throw new Error(`session state not preserved: ${JSON.stringify(second)}`);
+}
+await tools.remote_session_close.execute({ session_id: session.sessionId }, {});
+console.log("paired + exec ok (cmd default + bash shell + persistent session)");
 
 agent.kill("SIGTERM");
 await new Promise((r) => setTimeout(r, 500));

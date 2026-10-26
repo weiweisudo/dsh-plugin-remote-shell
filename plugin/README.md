@@ -13,7 +13,8 @@ DSH bundle（host + client）：配对、机器台账、WS 端点和工具注册
 - `GET /api/remote-shell/pairings` 等待中的配对
 - `GET /api/remote-shell/machines` 机器列表
 - `DELETE /api/remote-shell/machines/:id` 撤销
-- 工具：`remote_hosts`、`remote_exec`（`shell` 可选；一次一条命令，无持久会话）
+- 工具：`remote_hosts`、`remote_exec`（一次性）
+- 工具：`remote_session_open` / `remote_session_exec` / `remote_session_close`（持久 shell）
 - 与 `dsh-server-deck` 的 `server_deck_*` **不是同一套台账**：本插件只管理主动出站的 agent 机器
 - 配对 secret / 设备 token 只存 SHA-256；设备凭证 180 天
 

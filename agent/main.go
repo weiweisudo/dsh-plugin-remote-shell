@@ -36,7 +36,7 @@ import (
 	"time"
 )
 
-const version = "0.1.0-p0.5.4"
+const version = "0.1.0-p0.5.5"
 
 const (
 	// loopback is hard-wired: the agent must never listen on a routable

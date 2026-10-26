@@ -70,14 +70,12 @@ remote-agent.exe service stop
 
 ## 连续执行
 
-当前 `remote_exec` 每次启动新进程，不保留 cwd/env/变量，也没有 stdin。真正的连续窗口需要 P2：
+- `remote_exec`：一次性进程，不保留 cwd/env/变量
+- `remote_session_open/exec/close`：持久 shell，`cd` / 变量 / cwd 跨命令保留，每条命令仍返回结构化 exit code / stdout / stderr / cwd
+- Windows 持久会话默认 PowerShell；`cmd` 持久会话暂不支持（用一次性 `remote_exec`）
+- 真正的交互终端（xterm / ConPTY）还没做；agent 不需要读终端屏幕
 
-- Windows `CreatePseudoConsole`（ConPTY）
-- Linux `creack/pty`
-- 协议增加 `pty_open` / `pty_data` / `pty_resize` / `pty_close`
-- DSH 侧 xterm 终端，`keepMounted: true`
-
-`shell: powershell` 只是换解释器，不会让命令之间共享状态。
+持久会话不是 PTY：stdout/stderr 分开，输出适合 agent。
 
 ## 管理员权限
 

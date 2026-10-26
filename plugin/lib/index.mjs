@@ -259,6 +259,7 @@ class MachineHub {
 		this.agents = new Map(); // machineId -> { ws, lastSeen, pingTimer }
 		this.pairingAgents = new Set();
 		this.pending = new Map();
+		this.sessions = new Map(); // sessionId -> machineId
 	}
 
 	attachDevice(ws, machine, issued = null) {
@@ -374,6 +375,21 @@ class MachineHub {
 			case "ping":
 				this.send(machineId, { type: "pong", time: nowISO() });
 				break;
+			case "session_opened":
+			case "session_result":
+			case "session_closed":
+			case "session_error": {
+				const pending = this.pending.get(msg.id);
+				if (!pending) break;
+				clearTimeout(pending.timer);
+				this.pending.delete(msg.id);
+				if (msg.type === "session_error") {
+					pending.reject(new Error(msg.error || "session error"));
+				} else {
+					pending.resolve(msg);
+				}
+				break;
+			}
 			default:
 				break;
 		}
@@ -389,6 +405,9 @@ class MachineHub {
 			clearTimeout(p.timer);
 			this.pending.delete(id);
 			p.reject(new Error(`machine ${machineId} disconnected`));
+		}
+		for (const [sessionId, owner] of this.sessions) {
+			if (owner === machineId) this.sessions.delete(sessionId);
 		}
 		console.info(`[remote-shell] agent offline: ${machineId}`);
 	}
@@ -454,6 +473,85 @@ class MachineHub {
 		});
 	}
 
+	request(machineId, payload, timeoutMs = 20_000) {
+		const entry = this.agents.get(machineId);
+		if (!entry || entry.ws.readyState !== 1) throw new Error(`machine ${machineId} is offline`);
+		const id = randomUUID();
+		const timeout = Math.max(1_000, Math.min(3_600_000, Number(timeoutMs) || 20_000));
+		return new Promise((resolve, reject) => {
+			const timer = setTimeout(() => {
+				this.pending.delete(id);
+				reject(new Error(`request timed out after ${timeout} ms`));
+			}, timeout);
+			this.pending.set(id, { resolve, reject, timer, machineId });
+			if (!this.send(machineId, { ...payload, id })) {
+				clearTimeout(timer);
+				this.pending.delete(id);
+				reject(new Error(`failed to send request to ${machineId}`));
+			}
+		});
+	}
+
+	async sessionOpen(machineId, shell = "", cwd = "") {
+		const sessionId = randomUUID();
+		const result = await this.request(
+			machineId,
+			{ type: "session_open", session_id: sessionId, shell, cwd },
+			20_000,
+		);
+		this.sessions.set(sessionId, machineId);
+		return {
+			sessionId,
+			shell: result.shell || shell || "",
+			cwd: result.cwd || cwd || "",
+		};
+	}
+
+	async sessionExec(sessionId, command, timeoutMs = 60_000) {
+		const machineId = this.sessions.get(sessionId);
+		if (!machineId) throw new Error(`session not found: ${sessionId}`);
+		const timeout = Math.max(1_000, Math.min(3_600_000, Number(timeoutMs) || 60_000));
+		let result;
+		try {
+			result = await this.request(
+				machineId,
+				{
+					type: "session_exec",
+					session_id: sessionId,
+					command,
+					timeout_seconds: Math.ceil(timeout / 1000),
+				},
+				timeout + 5_000,
+			);
+		} catch (error) {
+			// A timeout, dead shell or protocol error invalidates the session.
+			this.sessions.delete(sessionId);
+			throw error;
+		}
+		if (result.timed_out) this.sessions.delete(sessionId);
+		return {
+			sessionId,
+			exitCode: Number(result.exit_code ?? -1),
+			stdout: String(result.stdout ?? ""),
+			stderr: String(result.stderr ?? ""),
+			cwd: String(result.cwd ?? ""),
+			truncated: Boolean(result.truncated),
+			timedOut: Boolean(result.timed_out),
+			durationMs: Number(result.duration_ms ?? 0),
+		};
+	}
+
+	async sessionClose(sessionId) {
+		const machineId = this.sessions.get(sessionId);
+		if (!machineId) return { ok: true };
+		try {
+			await this.request(machineId, { type: "session_close", session_id: sessionId }, 10_000);
+		} finally {
+			this.sessions.delete(sessionId);
+		}
+		return { ok: true };
+	}
+
 	disconnect(machineId) {
 		const entry = this.agents.get(machineId);
 		if (entry) {
@@ -477,6 +575,7 @@ class MachineHub {
 			} catch {}
 		}
 		this.pairingAgents.clear();
+		this.sessions.clear();
 	}
 }
 
@@ -826,6 +925,106 @@ export function apply(ctx) {
 					timedOut: result.timedOut,
 					durationMs: result.durationMs,
 				};
+			},
+		}),
+	);
+
+	ctx.tools.register(
+		defineTool({
+			name: "remote_session_open",
+			description:
+				"Open a persistent shell session on a remote-shell agent machine. Use remote_session_exec to run commands in it; use remote_exec for one-shot commands. This is not a Server Deck SSH host.",
+			parameters: {
+				machine: { type: "string", required: true, description: "Machine id or exact name." },
+				shell: {
+					type: "string",
+					description: "Windows: powershell | pwsh. Unix: bash | sh. Omit for platform default.",
+				},
+				cwd: { type: "string", description: "Initial working directory." },
+			},
+			output: {
+				schema: {
+					type: "object",
+					additionalProperties: false,
+					properties: {
+						sessionId: { type: "string", required: true },
+						shell: { type: "string", required: true },
+						cwd: { type: "string", required: true },
+					},
+				},
+				render: (_args, value) => [
+					{ type: "text", text: `会话已打开：${value.sessionId} (${value.shell}) ${value.cwd}` },
+				],
+			},
+			isConcurrencySafe: () => true,
+			async execute(args) {
+				const machine = store.find(args.machine);
+				if (!machine) throw new Error(`machine not found: ${args.machine}`);
+				if (!hub.agents.has(machine.id)) throw new Error(`machine offline: ${machine.name} (${machine.id})`);
+				return await hub.sessionOpen(machine.id, String(args.shell || ""), String(args.cwd || ""));
+			},
+		}),
+	);
+
+	ctx.tools.register(
+		defineTool({
+			name: "remote_session_exec",
+			description:
+				"Run one command in a persistent remote-shell session. Returns structured stdout/stderr/exit_code/cwd; shell state (cd, variables) persists across calls.",
+			parameters: {
+				session_id: { type: "string", required: true, description: "Session id returned by remote_session_open." },
+				command: { type: "string", required: true, description: "Command to run." },
+				timeout_ms: { type: "integer", description: "Timeout in ms (1000-3600000), default 60000." },
+			},
+			timeoutMs: 3_700_000,
+			output: {
+				schema: {
+					type: "object",
+					additionalProperties: false,
+					properties: {
+						sessionId: { type: "string", required: true },
+						exitCode: { type: "integer", required: true },
+						stdout: { type: "string", required: true },
+						stderr: { type: "string", required: true },
+						cwd: { type: "string", required: true },
+						truncated: { type: "boolean", required: true },
+						timedOut: { type: "boolean", required: true },
+						durationMs: { type: "number", required: true },
+					},
+				},
+				render: (_args, value) => {
+					const head = `session ${value.sessionId} exit ${value.exitCode}${value.timedOut ? " timed out" : ""}`;
+					const body = [value.stdout, value.stderr].filter((s) => s.length > 0).join("\n");
+					return [{ type: "text", text: body.length > 0 ? `${head}\n${body}` : head }];
+				},
+			},
+			isConcurrencySafe: () => false,
+			async execute(args) {
+				const command = String(args.command || "").trim();
+				if (!command) throw new Error("command 不能为空");
+				return await hub.sessionExec(String(args.session_id || ""), command, args.timeout_ms ?? 60_000);
+			},
+		}),
+	);
+
+	ctx.tools.register(
+		defineTool({
+			name: "remote_session_close",
+			description: "Close a persistent remote-shell session and release its process.",
+			parameters: {
+				session_id: { type: "string", required: true, description: "Session id returned by remote_session_open." },
+			},
+			output: {
+				schema: {
+					type: "object",
+					additionalProperties: false,
+					properties: { ok: { type: "boolean", required: true } },
+				},
+				render: () => [{ type: "text", text: "会话已关闭" }],
+			},
+			isConcurrencySafe: () => true,
+			async execute(args) {
+				return await hub.sessionClose(String(args.session_id || ""));
 			},
 		}),
 	);
