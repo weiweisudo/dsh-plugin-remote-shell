@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-juzi-remote-shell",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "private": true,
   "description": "桔子会话（Juzi Session）：outbound agent 远程执行、持久 shell 与配对链接",
   "main": "lib/index.mjs",

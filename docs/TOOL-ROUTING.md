@@ -39,6 +39,11 @@ juzi_job_start
 juzi_job_status
 juzi_job_cancel
 juzi_job_list
+juzi_file_put
+juzi_file_get
+juzi_transfer_status
+juzi_transfer_cancel
+juzi_transfer_list
 ```
 
 - **只**管理通过一次性配对链接注册的 outbound agent

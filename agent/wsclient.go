@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -34,6 +35,15 @@ type wireMessage struct {
 	Arch           string    `json:"arch,omitempty"`
 	Version        string    `json:"version,omitempty"`
 	Features       []string  `json:"features,omitempty"`
+	TransferID     string    `json:"transfer_id,omitempty"`
+	Direction      string    `json:"direction,omitempty"`
+	Path           string    `json:"path,omitempty"`
+	Size           int64     `json:"size,omitempty"`
+	SHA256         string    `json:"sha256,omitempty"`
+	Offset         int64     `json:"offset,omitempty"`
+	Overwrite      bool      `json:"overwrite,omitempty"`
+	Resume         bool      `json:"resume,omitempty"`
+	OK             bool      `json:"ok,omitempty"`
 	DeviceToken    string    `json:"device_token,omitempty"`
 	ExpiresAt      string    `json:"expires_at,omitempty"`
 	Time           string    `json:"time,omitempty"`
@@ -206,6 +216,15 @@ func connectOutbound(ctx context.Context, cfg *config) (bool, error) {
 		_ = conn.SetWriteDeadline(time.Now().Add(wsWriteTimeout))
 		return conn.WriteJSON(msg)
 	}
+	sendBinary := func(data []byte) error {
+		writeMu.Lock()
+		defer writeMu.Unlock()
+		_ = conn.SetWriteDeadline(time.Now().Add(wsWriteTimeout))
+		return conn.WriteMessage(websocket.BinaryMessage, data)
+	}
+	files := newTransferManager(send, sendBinary)
+	defer files.close()
+	conn.SetReadLimit(256 << 10)
 
 	hostname := cfg.name
 	if hostname == "" {
@@ -218,7 +237,7 @@ func connectOutbound(ctx context.Context, cfg *config) (bool, error) {
 		OS:        runtime.GOOS,
 		Arch:      runtime.GOARCH,
 		Version:   version,
-		Features:  []string{"jobs", "sessions", "shell"},
+		Features:  []string{"jobs", "sessions", "shell", "files"},
 		Time:      time.Now().UTC().Format(time.RFC3339),
 	}); err != nil {
 		return false, fmt.Errorf("hello: %w", err)
@@ -260,8 +279,8 @@ func connectOutbound(ctx context.Context, cfg *config) (bool, error) {
 
 	connected := true
 	for {
-		var msg wireMessage
-		if err := conn.ReadJSON(&msg); err != nil {
+		messageType, data, err := conn.ReadMessage()
+		if err != nil {
 			var ce *websocket.CloseError
 			if errors.As(err, &ce) && (ce.Code == 4001 || ce.Code == 4003) {
 				return connected, fatalError{fmt.Errorf("outbound closed: %s", ce.Text)}
@@ -269,6 +288,14 @@ func connectOutbound(ctx context.Context, cfg *config) (bool, error) {
 			return connected, err
 		}
 		_ = conn.SetReadDeadline(time.Now().Add(wsPongWait))
+		if messageType == websocket.BinaryMessage {
+			files.handleBinary(data)
+			continue
+		}
+		var msg wireMessage
+		if err := json.Unmarshal(data, &msg); err != nil {
+			continue
+		}
 		switch msg.Type {
 		case "hello_ok":
 			if cfg.onPaired != nil {
@@ -376,6 +403,8 @@ func connectOutbound(ctx context.Context, cfg *config) (bool, error) {
 				}
 				_ = send(wireMessage{Type: "job_list_result", ID: m.ID, Jobs: wire})
 			}(msg)
+		case "file_begin", "file_request", "file_ready", "file_ack", "file_end", "file_abort", "file_result":
+			files.handleJSON(msg)
 		case "session_open":
 			if msg.ID == "" || msg.SessionID == "" {
 				_ = send(wireMessage{Type: "session_error", ID: msg.ID, SessionID: msg.SessionID, Error: "missing request or session id"})

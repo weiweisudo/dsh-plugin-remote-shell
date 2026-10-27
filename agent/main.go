@@ -36,7 +36,9 @@ import (
 	"time"
 )
 
-const version = "0.1.0-p0.5.14"
+const version = "0.1.0-p0.5.15"
+
+var serviceMode bool
 
 const (
 	// loopback is hard-wired: the agent must never listen on a routable
@@ -98,6 +100,9 @@ func main() {
 		showVer     = flag.Bool("version", false, "print version and exit")
 	)
 	flag.Parse()
+	if os.Getenv("RELAY_SERVICE") == "1" {
+		serviceMode = true
+	}
 
 	if *showVer {
 		fmt.Println("remote-agent", version)

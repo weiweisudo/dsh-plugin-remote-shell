@@ -166,6 +166,7 @@ func runWindowsService() error {
 type serviceHandler struct{}
 
 func (h *serviceHandler) Execute(_ []string, r <-chan svc.ChangeRequest, changes chan<- svc.Status) (bool, uint32) {
+	serviceMode = true
 	changes <- svc.Status{State: svc.StartPending}
 	cfg := defaultDesktopConfig()
 	cfg.credentialsFile = serviceCredentialsPath()

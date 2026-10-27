@@ -140,7 +140,60 @@ const jobList = await tools.juzi_job_list.execute({ machine: machine.id }, {});
 if (!Array.isArray(jobList.jobs) || jobList.jobs.length < 2) throw new Error(`job list failed: ${JSON.stringify(jobList)}`);
 const jobsHttp = await api("GET", "/jobs");
 if (!jobsHttp?.ok || !Array.isArray(jobsHttp.jobs) || jobsHttp.jobs.length < 2) throw new Error(`jobs HTTP failed: ${JSON.stringify(jobsHttp)}`);
-console.log("paired + exec ok (cmd default + bash shell + persistent session + async jobs)");
+const fileName = `juzi-e2e-${process.pid}.txt`;
+const localUpload = join(state, "upload.txt");
+const localDownload = join(state, "downloaded.txt");
+const uploadBytes = Buffer.alloc(2 * 1024 * 1024 + 123);
+for (let i = 0; i < uploadBytes.length; i++) uploadBytes[i] = i % 251;
+writeFileSync(localUpload, uploadBytes);
+const put = await tools.juzi_file_put.execute(
+  { machine: machine.id, local_path: localUpload, remote_path: fileName },
+  {},
+);
+let putStatus = await tools.juzi_transfer_status.execute({ transfer_id: put.transferId, wait_ms: 2000 }, {});
+for (let i = 0; i < 10 && !["completed", "failed", "canceled"].includes(putStatus.status); i++) {
+  putStatus = await tools.juzi_transfer_status.execute({ transfer_id: put.transferId, wait_ms: 2000 }, {});
+}
+if (putStatus.status !== "completed") throw new Error(`upload failed: ${JSON.stringify(putStatus)}`);
+const get = await tools.juzi_file_get.execute(
+  { machine: machine.id, remote_path: fileName, local_path: localDownload },
+  {},
+);
+let getStatus = await tools.juzi_transfer_status.execute({ transfer_id: get.transferId, wait_ms: 2000 }, {});
+for (let i = 0; i < 10 && !["completed", "failed", "canceled"].includes(getStatus.status); i++) {
+  getStatus = await tools.juzi_transfer_status.execute({ transfer_id: get.transferId, wait_ms: 2000 }, {});
+}
+if (getStatus.status !== "completed") throw new Error(`download failed: ${JSON.stringify(getStatus)}`);
+if (!readFileSync(localDownload).equals(readFileSync(localUpload))) {
+  throw new Error("file content mismatch");
+}
+const overwriteDenied = await tools.juzi_file_put.execute(
+  { machine: machine.id, local_path: localUpload, remote_path: fileName },
+  {},
+);
+let deniedStatus = await tools.juzi_transfer_status.execute({ transfer_id: overwriteDenied.transferId, wait_ms: 2000 }, {});
+for (let i = 0; i < 5 && !["completed", "failed", "canceled"].includes(deniedStatus.status); i++) {
+  deniedStatus = await tools.juzi_transfer_status.execute({ transfer_id: overwriteDenied.transferId, wait_ms: 2000 }, {});
+}
+if (deniedStatus.status !== "failed" || deniedStatus.error !== "exists") {
+  throw new Error(`overwrite guard failed: ${JSON.stringify(deniedStatus)}`);
+}
+const transferList = await tools.juzi_transfer_list.execute({ machine: machine.id }, {});
+if (!Array.isArray(transferList.transfers) || transferList.transfers.length < 2) {
+  throw new Error(`transfer list failed: ${JSON.stringify(transferList)}`);
+}
+const cancelPut = await tools.juzi_file_put.execute(
+  { machine: machine.id, local_path: localUpload, remote_path: `${fileName}.cancel` },
+  {},
+);
+const cancelResult = await tools.juzi_transfer_cancel.execute({ transfer_id: cancelPut.transferId }, {});
+if (cancelResult.status !== "canceled") throw new Error(`cancel failed: ${JSON.stringify(cancelResult)}`);
+const transfersHttp = await api("GET", "/transfers");
+if (!transfersHttp?.ok || !Array.isArray(transfersHttp.transfers) || transfersHttp.transfers.length < 2) {
+  throw new Error(`transfers HTTP failed: ${JSON.stringify(transfersHttp)}`);
+}
+await tools.juzi_exec.execute({ machine: machine.id, shell: "bash", command: `rm -f ~/Downloads/${fileName} ~/Downloads/${fileName}.cancel ~/Downloads/${fileName}.cancel.part ~/Downloads/${fileName}.cancel.part.meta` }, {});
+console.log("paired + exec ok (cmd default + bash shell + persistent session + async jobs + files)");
 
 agent.kill("SIGTERM");
 await new Promise((r) => setTimeout(r, 500));

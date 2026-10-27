@@ -197,6 +197,7 @@ window.__ModuleLoader__.load({
 			const [machines, setMachines] = useState([]);
 			const [pairings, setPairings] = useState([]);
 			const [jobs, setJobs] = useState([]);
+			const [transfers, setTransfers] = useState([]);
 			const [presets, setPresets] = useState([]);
 			const [currentId, setCurrentId] = useState("");
 			const [agentPort, setAgentPort] = useState(47777);
@@ -209,15 +210,17 @@ window.__ModuleLoader__.load({
 			const [now, setNow] = useState(Date.now());
 
 			const load = useCallback(async () => {
-				const [m, q, c, j] = await Promise.all([
+				const [m, q, c, j, x] = await Promise.all([
 					request("/machines"),
 					request("/pairings"),
 					request("/config"),
 					request("/jobs"),
+					request("/transfers"),
 				]);
 				if (m?.ok && Array.isArray(m.machines)) setMachines(m.machines);
 				if (q?.ok && Array.isArray(q.pairings)) setPairings(q.pairings);
 				if (j?.ok && Array.isArray(j.jobs)) setJobs(j.jobs);
+				if (x?.ok && Array.isArray(x.transfers)) setTransfers(x.transfers);
 				if (c?.ok) {
 					if (Array.isArray(c.presets)) setPresets(c.presets);
 					if (typeof c.currentId === "string") setCurrentId(c.currentId);
@@ -301,6 +304,15 @@ window.__ModuleLoader__.load({
 					setCreated((prev) => (prev?.pairing?.id === id ? null : prev));
 					load();
 				} else setMessage(res?.error || "取消失败");
+			}
+
+			async function cancelTransfer(id) {
+				setBusy(`transfer:${id}`);
+				setMessage("");
+				const res = await request(`/transfers/${encodeURIComponent(id)}/cancel`, { method: "POST" });
+				setBusy("");
+				if (res?.ok) load();
+				else setMessage(res?.error || "取消失败");
 			}
 
 			async function cancelJob(id) {
@@ -576,6 +588,49 @@ window.__ModuleLoader__.load({
 													style: { ...S.button, ...S.danger, flex: "0 0 auto" },
 													disabled: busy !== "",
 													onClick: () => cancelJob(job.jobId),
+												},
+												"取消",
+											)
+										: null,
+								),
+							),
+				),
+
+				h(
+					"div",
+					{ style: S.card },
+					h(
+						"div",
+						{ style: S.head },
+						h("div", { style: S.title }, "文件传输"),
+						h("div", { style: S.sub }, `${transfers.filter((t) => ["running", "queued", "preparing", "verifying"].includes(t.status)).length} 进行中 / ${transfers.length} 个`),
+					),
+					transfers.length === 0
+						? h("div", { style: S.note }, "还没有文件传输。用 juzi_file_put / juzi_file_get 发起。")
+						: transfers.map((t) =>
+								h(
+									"div",
+									{ key: t.transferId, style: { ...S.preset, alignItems: "flex-start" } },
+									h(
+										"div",
+										{ style: { flex: "1 1 auto", minWidth: 0 } },
+										h(
+											"div",
+											{ style: S.row },
+											h("span", { style: S.presetName }, t.direction === "upload" ? `↑ ${t.remotePath}` : `↓ ${t.localPath}`),
+											h("span", { style: S.badge }, t.status),
+											h("span", { style: S.note }, `${t.bytesDone}/${t.size} · ${t.speed}B/s`),
+										),
+										h("div", { style: S.note }, t.direction === "upload" ? `${t.localPath} → ${t.remotePath}` : `${t.remotePath} → ${t.localPath}`),
+										t.error ? h("div", { style: { ...S.note, color: "var(--bad)" } }, t.error) : null,
+									),
+									["running", "queued", "preparing", "verifying"].includes(t.status)
+										? h(
+												"button",
+												{
+													style: { ...S.button, ...S.danger, flex: "0 0 auto" },
+													disabled: busy !== "",
+													onClick: () => cancelTransfer(t.transferId),
 												},
 												"取消",
 											)

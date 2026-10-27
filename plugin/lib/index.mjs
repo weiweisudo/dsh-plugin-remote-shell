@@ -2,6 +2,7 @@ import { defineTool } from "@deepseek-ai/dsh-tools";
 import http from "node:http";
 import { WebSocketServer } from "ws";
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { TransferManager } from "./transfers.js";
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
@@ -262,6 +263,12 @@ class MachineHub {
 		this.pending = new Map();
 		this.sessions = new Map(); // sessionId -> machineId
 		this.jobs = new Map(); // jobId -> machineId
+		this.transfers = new TransferManager({
+			sendJSON: (machineId, payload) => this.send(machineId, payload),
+			sendBinary: (machineId, payload) => this.sendBinary(machineId, payload),
+			stateDir: STATE_DIR,
+			workspace: process.cwd(),
+		});
 	}
 
 	attachDevice(ws, machine, issued = null) {
@@ -281,7 +288,7 @@ class MachineHub {
 			} catch {}
 		}, 30_000);
 
-		ws.on("message", (data) => this.onMessage(machine.id, entry, data));
+		ws.on("message", (data, isBinary) => this.onMessage(machine.id, entry, data, isBinary));
 		ws.on("close", () => this.detach(machine.id, entry));
 		ws.on("error", () => {});
 		if (!issued && machine.device_expires_at) {
@@ -336,7 +343,11 @@ class MachineHub {
 		});
 	}
 
-	onMessage(machineId, entry, raw) {
+	onMessage(machineId, entry, raw, isBinary = false) {
+		if (isBinary) {
+			void this.transfers.handleBinary(machineId, raw);
+			return;
+		}
 		let msg;
 		try {
 			msg = JSON.parse(String(raw));
@@ -386,7 +397,18 @@ class MachineHub {
 			case "job_status_result":
 			case "job_canceled":
 			case "job_list_result":
-			case "job_error": {
+			case "job_error":
+			case "file_ready":
+			case "file_offer":
+			case "file_ack":
+			case "file_end":
+			case "file_result":
+			case "file_error":
+			case "file_status": {
+				if (msg.type.startsWith("file_")) {
+					void this.transfers.handleJSON(machineId, msg);
+					break;
+				}
 				const pending = this.pending.get(msg.id);
 				if (!pending) break;
 				clearTimeout(pending.timer);
@@ -417,6 +439,7 @@ class MachineHub {
 		for (const [sessionId, owner] of this.sessions) {
 			if (owner === machineId) this.sessions.delete(sessionId);
 		}
+		this.transfers.detach(machineId);
 		console.info(`[juzi] agent offline: ${machineId}`);
 	}
 
@@ -429,6 +452,20 @@ class MachineHub {
 		} catch {
 			return false;
 		}
+	}
+
+	sendBinary(machineId, payload) {
+		return new Promise((resolvePromise, reject) => {
+			const entry = this.agents.get(machineId);
+			if (!entry || entry.ws.readyState !== 1) {
+				reject(new Error(`machine offline: ${machineId}`));
+				return;
+			}
+			entry.ws.send(payload, { binary: true }, (error) => {
+				if (error) reject(error);
+				else resolvePromise();
+			});
+		});
 	}
 
 	onlineIds() {
@@ -679,6 +716,7 @@ class MachineHub {
 		this.pairingAgents.clear();
 		this.sessions.clear();
 		this.jobs.clear();
+		this.transfers.close();
 	}
 }
 
@@ -849,6 +887,31 @@ export function apply(ctx) {
 				},
 			}),
 		"remote-shell: switch link preset",
+	);
+
+	ctx.effect(
+		() =>
+			ctx.webServer.register({
+				kind: "prefix",
+				path: `${BASE}/transfers`,
+				handler: async (req, res) => {
+					const url = new URL(req.url || "/", "http://local");
+					const rest = url.pathname.slice(`${BASE}/transfers`.length).replace(/^\/+/, "");
+					if (req.method === "GET" && rest === "") {
+						return sendJson(res, 200, { ok: true, transfers: hub.transfers.list() });
+					}
+					if (req.method === "POST" && rest.endsWith("/cancel")) {
+						const id = rest.slice(0, -"/cancel".length);
+						try {
+							return sendJson(res, 200, { ok: true, transfer: await hub.transfers.cancel(id) });
+						} catch (error) {
+							return sendJson(res, 404, { ok: false, error: error.message });
+						}
+					}
+					return sendJson(res, 405, { ok: false, error: "method not allowed" });
+				},
+			}),
+		"juzi: transfer api",
 	);
 
 	ctx.effect(
@@ -1339,6 +1402,266 @@ export function apply(ctx) {
 					machineId = machine.id;
 				}
 				return { jobs: await hub.jobList(machineId) };
+			},
+		}),
+	);
+
+	ctx.tools.register(
+		defineTool({
+			name: "juzi_file_put",
+			description:
+				"Juzi Session: upload a local DSH file to a remote Juzi machine. Returns immediately with a transferId; use juzi_transfer_status to follow progress.",
+			parameters: {
+				machine: { type: "string", required: true, description: "Machine id or exact name." },
+				local_path: { type: "string", required: true, description: "DSH-local source file; relative to the DSH workspace." },
+				remote_path: { type: "string", description: "Remote target path; relative to the agent default upload directory." },
+				overwrite: { type: "boolean", description: "Allow replacing an existing remote file; default false." },
+				resume: { type: "boolean", description: "Resume a matching .part; default true." },
+			},
+			output: {
+				schema: {
+					type: "object",
+					additionalProperties: false,
+					properties: {
+						transferId: { type: "string", required: true },
+						direction: { type: "string", required: true },
+						localPath: { type: "string", required: true },
+						remotePath: { type: "string", required: true },
+						size: { type: "number", required: true },
+						status: { type: "string", required: true },
+					},
+				},
+				render: (_args, value) => [{ type: "text", text: `上传任务 ${value.transferId} ${value.status}` }],
+			},
+			isConcurrencySafe: () => true,
+			async execute(args) {
+				const machine = store.find(args.machine);
+				if (!machine) throw new Error(`machine not found: ${args.machine}`);
+				if (!hub.agents.has(machine.id)) throw new Error(`machine offline: ${machine.name} (${machine.id})`);
+				if (!hub.agentSupports(machine.id, "files")) throw new Error("this agent does not support file transfer; update remote-agent");
+				const t = await hub.transfers.put(
+					machine.id,
+					String(args.local_path || ""),
+					String(args.remote_path || ""),
+					Boolean(args.overwrite),
+					args.resume !== false,
+				);
+				return {
+					transferId: t.transferId, direction: t.direction, localPath: t.localPath, remotePath: t.remotePath,
+					size: t.size, status: t.status,
+				};
+			},
+		}),
+	);
+
+	ctx.tools.register(
+		defineTool({
+			name: "juzi_file_get",
+			description:
+				"Juzi Session: download a remote file from a Juzi machine to the DSH workspace. Returns immediately with a transferId; use juzi_transfer_status to follow progress.",
+			parameters: {
+				machine: { type: "string", required: true, description: "Machine id or exact name." },
+				remote_path: { type: "string", required: true, description: "Remote source path; relative to the agent default upload directory." },
+				local_path: { type: "string", description: "DSH-local target; default workspace + remote filename." },
+				overwrite: { type: "boolean", description: "Allow replacing an existing local file; default false." },
+				resume: { type: "boolean", description: "Resume a matching .part; default true." },
+			},
+			output: {
+				schema: {
+					type: "object",
+					additionalProperties: false,
+					properties: {
+						transferId: { type: "string", required: true },
+						direction: { type: "string", required: true },
+						localPath: { type: "string", required: true },
+						remotePath: { type: "string", required: true },
+						size: { type: "number", required: true },
+						status: { type: "string", required: true },
+					},
+				},
+				render: (_args, value) => [{ type: "text", text: `下载任务 ${value.transferId} ${value.status}` }],
+			},
+			isConcurrencySafe: () => true,
+			async execute(args) {
+				const machine = store.find(args.machine);
+				if (!machine) throw new Error(`machine not found: ${args.machine}`);
+				if (!hub.agents.has(machine.id)) throw new Error(`machine offline: ${machine.name} (${machine.id})`);
+				if (!hub.agentSupports(machine.id, "files")) throw new Error("this agent does not support file transfer; update remote-agent");
+				const t = await hub.transfers.get(
+					machine.id,
+					String(args.remote_path || ""),
+					String(args.local_path || ""),
+					Boolean(args.overwrite),
+					args.resume !== false,
+				);
+				return {
+					transferId: t.transferId, direction: t.direction, localPath: t.localPath, remotePath: t.remotePath,
+					size: t.size, status: t.status,
+				};
+			},
+		}),
+	);
+
+	ctx.tools.register(
+		defineTool({
+			name: "juzi_transfer_status",
+			description: "Juzi Session: read file transfer progress; wait_ms up to 30000 long-polls.",
+			parameters: {
+				transfer_id: { type: "string", required: true, description: "Transfer id returned by juzi_file_put/get." },
+				wait_ms: { type: "integer", description: "Long-poll up to 30000 ms; default 0." },
+			},
+			timeoutMs: 45_000,
+			output: {
+				schema: {
+					type: "object",
+					additionalProperties: false,
+					properties: {
+						transferId: { type: "string", required: true },
+						machineId: { type: "string", required: true },
+						direction: { type: "string", required: true },
+						localPath: { type: "string", required: true },
+						remotePath: { type: "string", required: true },
+						size: { type: "number", required: true },
+						sha256: { type: "string", required: true },
+						status: { type: "string", required: true },
+						bytesDone: { type: "number", required: true },
+						speed: { type: "number", required: true },
+						etaSeconds: { type: "number", required: true },
+						attempt: { type: "number", required: true },
+						error: { type: "string", required: true },
+						createdAt: { type: "string", required: true },
+						updatedAt: { type: "string", required: true },
+					},
+				},
+				render: (_args, value) => [
+					{
+						type: "text",
+						text: `${value.direction} ${value.status} ${value.bytesDone}/${value.size} ${value.speed}B/s ${value.error}`,
+					},
+				],
+			},
+			isConcurrencySafe: () => true,
+			async execute(args) {
+				return await hub.transfers.status(String(args.transfer_id || ""), args.wait_ms ?? 0);
+			},
+		}),
+	);
+
+	ctx.tools.register(
+		defineTool({
+			name: "juzi_transfer_cancel",
+			description: "Juzi Session: cancel a file transfer and remove its .part file.",
+			parameters: {
+				transfer_id: { type: "string", required: true, description: "Transfer id returned by juzi_file_put/get." },
+			},
+			output: {
+				schema: {
+					type: "object",
+					additionalProperties: false,
+					properties: {
+						transferId: { type: "string", required: true },
+						status: { type: "string", required: true },
+						bytesDone: { type: "number", required: true },
+						size: { type: "number", required: true },
+					},
+				},
+				render: (_args, value) => [{ type: "text", text: `传输已取消：${value.transferId}` }],
+			},
+			isConcurrencySafe: () => false,
+			async execute(args) {
+				const t = await hub.transfers.cancel(String(args.transfer_id || ""));
+				return { transferId: t.transferId, status: t.status, bytesDone: t.bytesDone, size: t.size };
+			},
+		}),
+	);
+
+	ctx.tools.register(
+		defineTool({
+			name: "juzi_transfer_list",
+			description: "Juzi Session: list file transfers, optionally limited to one machine.",
+			parameters: {
+				machine: { type: "string", description: "Optional machine id or exact name." },
+			},
+			output: {
+				schema: {
+					type: "object",
+					additionalProperties: false,
+					properties: {
+						transfers: {
+							type: "array",
+							required: true,
+							items: {
+								type: "object",
+								additionalProperties: false,
+								properties: {
+									transferId: { type: "string", required: true },
+									machineId: { type: "string", required: true },
+									direction: { type: "string", required: true },
+									localPath: { type: "string", required: true },
+									remotePath: { type: "string", required: true },
+									size: { type: "number", required: true },
+									sha256: { type: "string", required: true },
+									status: { type: "string", required: true },
+									bytesDone: { type: "number", required: true },
+									speed: { type: "number", required: true },
+									etaSeconds: { type: "number", required: true },
+									attempt: { type: "number", required: true },
+									error: { type: "string", required: true },
+									createdAt: { type: "string", required: true },
+									updatedAt: { type: "string", required: true },
+								},
+							},
+						},
+					},
+				},
+				render: (_args, value) => [
+					{
+						type: "text",
+						text:
+							value.transfers.length === 0
+								? "没有传输"
+								: value.transfers.map((t) => `- ${t.transferId} ${t.direction} ${t.status} ${t.bytesDone}/${t.size}`).join("\n"),
+					},
+				],
+			},
+			isConcurrencySafe: () => true,
+			async execute(args) {
+				let machineId = "";
+				if (args.machine) {
+					const machine = store.find(args.machine);
+					if (!machine) throw new Error(`machine not found: ${args.machine}`);
+					machineId = machine.id;
+				}
+				return { transfers: hub.transfers.list(machineId) };
+			},
+		}),
+	);
+
+	ctx.tools.register(
+		defineTool({
+			name: "juzi_transfer_retry",
+			description: "Juzi Session: retry a paused or failed file transfer, reusing its .part file for resume.",
+			parameters: {
+				transfer_id: { type: "string", required: true, description: "Transfer id to retry." },
+			},
+			output: {
+				schema: {
+					type: "object",
+					additionalProperties: false,
+					properties: {
+						transferId: { type: "string", required: true },
+						direction: { type: "string", required: true },
+						status: { type: "string", required: true },
+						bytesDone: { type: "number", required: true },
+						size: { type: "number", required: true },
+					},
+				},
+				render: (_args, value) => [{ type: "text", text: `重试传输：${value.transferId} ${value.status}` }],
+			},
+			isConcurrencySafe: () => false,
+			async execute(args) {
+				const t = await hub.transfers.retry(String(args.transfer_id || ""));
+				return { transferId: t.transferId, direction: t.direction, status: t.status, bytesDone: t.bytesDone, size: t.size };
 			},
 		}),
 	);
