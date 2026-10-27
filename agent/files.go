@@ -395,7 +395,7 @@ func (m *transferManager) handleBinary(data []byte) {
 	acked := t.acked
 	t.mu.Unlock()
 	if shouldAck {
-		_ = m.sendJSON(wireMessage{Type: "file_ack", TransferID: t.id, Offset: acked})
+		_ = m.sendJSON(wireMessage{Type: "file_ack", TransferID: wireTransferID(t.id), Offset: acked})
 	}
 }
 

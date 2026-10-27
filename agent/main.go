@@ -36,7 +36,7 @@ import (
 	"time"
 )
 
-const version = "0.1.0-p0.5.15"
+const version = "0.1.0-p0.5.16"
 
 var serviceMode bool
 
