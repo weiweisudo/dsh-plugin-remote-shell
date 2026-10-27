@@ -74,6 +74,19 @@ func runDesktop(cfg *config) error {
 		cfg = defaultDesktopConfig()
 	}
 	applySavedName(cfg)
+	wait := time.Duration(0)
+	if elevatedLaunch {
+		wait = 10 * time.Second
+	}
+	instance, err := acquireSingleInstance(wait)
+	if err != nil {
+		if err == errAlreadyRunning {
+			showAgentMessage("桔子会话已经在运行。请使用托盘图标打开设置。", "桔子会话")
+			return nil
+		}
+		return err
+	}
+	defer releaseSingleInstance(instance)
 	app := &desktopApp{cfg: *cfg}
 	if err := app.startUI(); err != nil {
 		return err
@@ -109,6 +122,7 @@ func (a *desktopApp) startUI() error {
 	mux.HandleFunc("/api/autostart", a.auth(a.handleAutoStart))
 	mux.HandleFunc("/api/device-name", a.auth(a.handleDeviceName))
 	mux.HandleFunc("/api/reset", a.auth(a.handleReset))
+	mux.HandleFunc("/api/elevate", a.auth(a.handleElevate))
 	mux.HandleFunc("/api/quit", a.auth(a.handleQuit))
 	a.server = &http.Server{Handler: mux}
 	go func() {
@@ -435,6 +449,26 @@ func (a *desktopApp) handleDeviceName(w http.ResponseWriter, r *http.Request) {
 	a.mu.Unlock()
 	a.startWorker()
 	writeJSONReply(w, http.StatusOK, map[string]any{"ok": true, "name": name})
+}
+
+func (a *desktopApp) handleElevate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSONReply(w, http.StatusMethodNotAllowed, map[string]any{"ok": false})
+		return
+	}
+	if processElevated() {
+		writeJSONReply(w, http.StatusOK, map[string]any{"ok": true, "already": true})
+		return
+	}
+	if err := relaunchAsAdmin(); err != nil {
+		writeJSONReply(w, http.StatusBadRequest, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	writeJSONReply(w, http.StatusOK, map[string]any{"ok": true, "restarting": true})
+	go func() {
+		time.Sleep(350 * time.Millisecond)
+		systray.Quit()
+	}()
 }
 
 func (a *desktopApp) handleReset(w http.ResponseWriter, r *http.Request) {

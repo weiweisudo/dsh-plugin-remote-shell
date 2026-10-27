@@ -17,6 +17,8 @@ var procAttachConsole = windows.NewLazySystemDLL("kernel32.dll").NewProc("Attach
 
 const attachParentProcess = ^uint32(0)
 
+var elevatedLaunch bool
+
 func attachParentConsole(args []string) {
 	if len(args) < 2 {
 		return
@@ -39,6 +41,9 @@ func platformEarly(args []string) (bool, error) {
 	case "service":
 		return true, serviceCommand(args[2:])
 	case "ui":
+		return true, runDesktop(defaultDesktopConfig())
+	case "--elevated":
+		elevatedLaunch = true
 		return true, runDesktop(defaultDesktopConfig())
 	case "--service":
 		return true, runWindowsService()

@@ -137,6 +137,15 @@ const desktopHTML = `<!doctype html>
   </section>
 
   <section>
+    <h2>权限</h2>
+    <div class="meta" id="privilege" style="margin-bottom:8px">读取中…</div>
+    <div class="row">
+      <button class="primary" id="elevate">以管理员身份重启</button>
+    </div>
+    <div class="msg" id="elevateMsg"></div>
+  </section>
+
+  <section>
     <h2>重置本地配置</h2>
     <div class="meta" style="margin-bottom:8px">清除后 agent 变为未配对；DSH 里的旧机器记录仍需在插件页「撤销」。</div>
     <div class="row">
@@ -220,6 +229,8 @@ const desktopHTML = `<!doctype html>
       $("uninstall").disabled = !s.service_installed;
       $("autostart").checked = !!s.autostart;
       $("autostart").disabled = !!s.service_running;
+      $("privilege").textContent = s.elevated ? "当前权限：管理员" : "当前权限：普通用户";
+      $("elevate").disabled = !!s.elevated;
       if (!nameDirty) nameInput.value = s.name || "";
       nameInput.disabled = !!s.service_installed;
       $("saveName").disabled = !!s.service_installed;
@@ -262,6 +273,19 @@ const desktopHTML = `<!doctype html>
       msg($("nameMsg"), e.message, "bad");
     }
   };
+  $("elevate").onclick = async () => {
+    try {
+      const data = await api("/api/elevate", { method: "POST" });
+      if (data.already) {
+        msg($("elevateMsg"), "当前已经是管理员权限", "ok");
+        return;
+      }
+      msg($("elevateMsg"), "已请求管理员权限，请在 UAC 弹窗中确认", "ok");
+    } catch (e) {
+      msg($("elevateMsg"), e.message, "bad");
+    }
+  };
+
   async function resetLocal(all) {
     const text = all
       ? "恢复默认配置？会删除配对凭证和设备名称。"
