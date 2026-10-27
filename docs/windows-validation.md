@@ -1,6 +1,6 @@
 # Windows 实机验证清单
 
-版本：`v0.1.0-p0.5.12`
+版本：`v0.1.0-p0.5.13`
 
 ## 1. 启动形态
 
@@ -65,7 +65,15 @@ juzi_session_close(session_id)
 - [ ] 超时行为符合文档（销毁会话）
 - [ ] close 后进程退出
 
-## 7. 异步 job
+## 7. 重置与改名
+
+- [ ] 修改设备名称后不出现 401，插件名称更新
+- [ ] 清除配对凭证后状态变为未配对
+- [ ] 恢复默认配置后名称回到 hostname
+- [ ] 服务运行时重置按钮拒绝
+- [ ] DSH 旧机器需手动撤销
+
+## 8. 异步 job
 
 ```text
 juzi_job_start(machine, shell="powershell", command="Start-Sleep 10; 'done'")
@@ -80,7 +88,7 @@ juzi_job_cancel(job_id)
 - [ ] Web「任务」卡片显示并取消
 - [ ] agent 断线重连后 job_list 能看到任务
 
-## 8. 待办
+## 9. 待办
 
 - [ ] 异步 job：长任务不占同步调用
 - [ ] DPAPI 保存凭证

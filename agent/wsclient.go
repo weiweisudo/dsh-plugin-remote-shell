@@ -271,6 +271,9 @@ func connectOutbound(ctx context.Context, cfg *config) (bool, error) {
 		_ = conn.SetReadDeadline(time.Now().Add(wsPongWait))
 		switch msg.Type {
 		case "hello_ok":
+			if cfg.onPaired != nil {
+				cfg.onPaired(msg.MachineID, msg.DeviceToken, msg.ExpiresAt)
+			}
 			if msg.DeviceToken != "" {
 				cfg.token = msg.DeviceToken
 				cfg.pairSecret = ""

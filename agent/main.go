@@ -36,7 +36,7 @@ import (
 	"time"
 )
 
-const version = "0.1.0-p0.5.12"
+const version = "0.1.0-p0.5.13"
 
 const (
 	// loopback is hard-wired: the agent must never listen on a routable
@@ -73,6 +73,7 @@ type config struct {
 	credentialsFile string
 	nameExplicit    bool
 	onStatus        func(workerStatus)
+	onPaired        func(machineID, token, expiresAt string)
 }
 
 func main() {

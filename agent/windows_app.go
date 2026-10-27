@@ -44,6 +44,7 @@ type desktopApp struct {
 	uiURL    string
 
 	ready      bool
+	pairing    bool
 	mStatus    *systray.MenuItem
 	mOpen      *systray.MenuItem
 	mReconnect *systray.MenuItem
@@ -107,6 +108,7 @@ func (a *desktopApp) startUI() error {
 	mux.HandleFunc("/api/service/uninstall", a.auth(a.handleUninstallService))
 	mux.HandleFunc("/api/autostart", a.auth(a.handleAutoStart))
 	mux.HandleFunc("/api/device-name", a.auth(a.handleDeviceName))
+	mux.HandleFunc("/api/reset", a.auth(a.handleReset))
 	mux.HandleFunc("/api/quit", a.auth(a.handleQuit))
 	a.server = &http.Server{Handler: mux}
 	go func() {
@@ -158,12 +160,13 @@ func (a *desktopApp) startWorker() {
 		a.cancel = nil
 	}
 	// Prefer a saved device credential unless we are starting a fresh pairing.
-	if a.cfg.pairSecret == "" && a.cfg.token == "" {
+	if !a.pairing {
 		if c, err := loadCredentials(a.cfg.credentialsFile); err == nil {
 			if a.cfg.serverURL == "" || a.cfg.serverURL == c.Endpoint {
 				a.cfg.serverURL = c.Endpoint
 				a.cfg.machineID = c.MachineID
 				a.cfg.token = c.Token
+				a.cfg.pairSecret = ""
 			}
 		}
 	}
@@ -182,6 +185,18 @@ func (a *desktopApp) startWorker() {
 		a.status = s
 		a.mu.Unlock()
 		a.refreshTray()
+	}
+	cfg.onPaired = func(machineID, token, expiresAt string) {
+		a.mu.Lock()
+		if token != "" {
+			a.cfg.token = token
+			a.cfg.pairSecret = ""
+		}
+		if machineID != "" {
+			a.cfg.machineID = machineID
+		}
+		a.pairing = false
+		a.mu.Unlock()
 	}
 	a.mu.Unlock()
 	go func() {
@@ -217,6 +232,7 @@ func (a *desktopApp) pair(link string) error {
 	a.cfg.pairSecret = secret
 	a.cfg.machineID = ""
 	a.cfg.token = ""
+	a.pairing = true
 	a.status = workerStatus{Error: "配对中…"}
 	a.mu.Unlock()
 	a.startWorker()
@@ -419,6 +435,55 @@ func (a *desktopApp) handleDeviceName(w http.ResponseWriter, r *http.Request) {
 	a.mu.Unlock()
 	a.startWorker()
 	writeJSONReply(w, http.StatusOK, map[string]any{"ok": true, "name": name})
+}
+
+func (a *desktopApp) handleReset(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSONReply(w, http.StatusMethodNotAllowed, map[string]any{"ok": false})
+		return
+	}
+	if installed, running, _ := queryServiceState(); installed && running {
+		writeJSONReply(w, http.StatusBadRequest, map[string]any{
+			"ok": false, "error": "服务正在运行；请先停止/解除服务，再重置本地配置",
+		})
+		return
+	}
+	var body struct {
+		Credentials bool `json:"credentials"`
+		Settings    bool `json:"settings"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSONReply(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "invalid JSON"})
+		return
+	}
+	if !body.Credentials && !body.Settings {
+		writeJSONReply(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "nothing to reset"})
+		return
+	}
+	a.stopWorker()
+	a.mu.Lock()
+	if body.Credentials {
+		_ = os.Remove(a.cfg.credentialsFile)
+		a.cfg.serverURL = ""
+		a.cfg.machineID = ""
+		a.cfg.pairSecret = ""
+		a.cfg.token = ""
+		a.pairing = false
+		a.status = workerStatus{Error: "未配对：粘贴新的连接链接"}
+	}
+	if body.Settings {
+		_ = os.Remove(settingsPath(a.cfg.credentialsFile))
+		a.cfg.name = hostnameOr("")
+		a.cfg.nameExplicit = false
+	}
+	name := a.cfg.name
+	a.mu.Unlock()
+	if body.Credentials {
+		a.refreshTray()
+	} else {
+		a.startWorker()
+	}
+	writeJSONReply(w, http.StatusOK, map[string]any{"ok": true, "name": name, "credentials_cleared": body.Credentials, "settings_cleared": body.Settings})
 }
 
 func (a *desktopApp) handleAutoStart(w http.ResponseWriter, r *http.Request) {

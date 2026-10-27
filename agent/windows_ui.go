@@ -137,6 +137,16 @@ const desktopHTML = `<!doctype html>
   </section>
 
   <section>
+    <h2>重置本地配置</h2>
+    <div class="meta" style="margin-bottom:8px">清除后 agent 变为未配对；DSH 里的旧机器记录仍需在插件页「撤销」。</div>
+    <div class="row">
+      <button class="danger" id="clearCred">清除配对凭证</button>
+      <button class="danger" id="resetAll">恢复默认配置</button>
+    </div>
+    <div class="msg" id="resetMsg"></div>
+  </section>
+
+  <section>
     <h2>开机启动</h2>
     <label class="checkrow"><input type="checkbox" id="autostart"> 登录 Windows 后自动启动托盘</label>
     <div class="meta" style="margin-top:8px">只写当前用户的 HKCU Run，不需要管理员；比服务轻。若已安装服务，建议关闭此项，避免重复连接。</div>
@@ -213,6 +223,8 @@ const desktopHTML = `<!doctype html>
       if (!nameDirty) nameInput.value = s.name || "";
       nameInput.disabled = !!s.service_installed;
       $("saveName").disabled = !!s.service_installed;
+      $("clearCred").disabled = !!s.service_running;
+      $("resetAll").disabled = !!s.service_running;
     } catch (e) {
       $("state").textContent = "无法读取设置接口";
       $("err").textContent = e.message;
@@ -250,6 +262,26 @@ const desktopHTML = `<!doctype html>
       msg($("nameMsg"), e.message, "bad");
     }
   };
+  async function resetLocal(all) {
+    const text = all
+      ? "恢复默认配置？会删除配对凭证和设备名称。"
+      : "清除配对凭证？设备名称会保留。";
+    if (!confirm(text)) return;
+    try {
+      const data = await api("/api/reset", {
+        method: "POST",
+        body: JSON.stringify({ credentials: true, settings: all }),
+      });
+      msg($("resetMsg"), all ? "已恢复默认配置" : "已清除配对凭证", "ok");
+      nameDirty = false;
+      if (data.name) nameInput.value = data.name;
+      load();
+    } catch (e) {
+      msg($("resetMsg"), e.message, "bad");
+    }
+  }
+  $("clearCred").onclick = () => resetLocal(false);
+  $("resetAll").onclick = () => resetLocal(true);
   $("autostart").onchange = async (event) => {
     try {
       const data = await api("/api/autostart", { method: "POST", body: JSON.stringify({ enabled: event.target.checked }) });
